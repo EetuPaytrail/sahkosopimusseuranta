@@ -181,3 +181,27 @@ footer { color: var(--text-3); font-size: 12.5px; padding: 0 0 40px; }
   th, td { padding: 5px 7px; }
 }
 td.name-cell { white-space: normal; min-width: 220px; max-width: 420px; }
+
+/* Top 5 */
+.top-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.top-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; background: var(--surface); }
+.top-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.top-head h3 { margin: 0; font-size: 15.5px; }
+.top-head .muted { font-size: 12px; }
+.top-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.top-list li { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+.top-list li:last-child { border-bottom: 0; }
+.top-list li.first { background: var(--best-bg); border-radius: 8px; border-bottom-color: transparent; }
+.top-list .rank {
+  width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12.5px; font-weight: 700;
+  background: var(--surface-2); color: var(--text-2);
+}
+.top-list li.first .rank { background: var(--accent); color: #fff; }
+.top-list .who { min-width: 0; }
+.top-list .prod { font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
+.top-list .prod a { color: var(--text-2); }
+.top-list .val { text-align: right; white-space: nowrap; font-size: 15px; }
+.top-list .val div { font-size: 12px; }
+.top-best { font-size: 11.5px; font-weight: 600; color: var(--accent); }
+.top-more { margin-top: auto; align-self: flex-start; font-size: 13px; }
+@media (max-width: 700px) { .top-grid { grid-template-columns: 1fr; } }

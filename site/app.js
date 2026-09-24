@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 const S = {
   tg: 'Household',
-  view: 'fixed',
+  view: 'top',
   mt: 'General',
   src: 'all', // all | api | site
   fixedTerms: new Set([12, 24]),
@@ -305,6 +305,72 @@ function cheapest(series) {
 // ---------------------------------------------------------------------------
 // Pörssisähkö
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Top 5
+// ---------------------------------------------------------------------------
+const TOP_N = 5;
+
+// Halvin sopimus per yhtiö, TOP_N halvinta. Yhtiön sivun ja Energiaviraston
+// samanhintaiset rivit yhdistetään (näytetään Energiaviraston tuotenimi).
+function topList(pred, allowZero) {
+  const i = D.latest;
+  const byCompany = new Map();
+  const nationalOnly = $('#topNational').checked;
+  for (const p of productsAt(i, pred)) {
+    if (p.m.seed) continue;
+    if (nationalOnly && (!p.m.nat || p.m.dr)) continue;
+    const pr = energyPrice(p.m, p.comps, allowZero);
+    if (!pr) continue;
+    const cur = byCompany.get(p.m.c);
+    const better = !cur || pr.v < cur.pr.v - 1e-9;
+    const tie = cur && Math.abs(pr.v - cur.pr.v) < 1e-9;
+    if (better) byCompany.set(p.m.c, { ...p, pr, alsoSite: false });
+    else if (tie) {
+      if (p.m.src === 'site') cur.alsoSite = true;
+      else if (cur.m.src === 'site') byCompany.set(p.m.c, { ...p, pr, alsoSite: true });
+    }
+  }
+  return [...byCompany.values()].sort((a, b) => a.pr.v - b.pr.v).slice(0, TOP_N).map((r) => {
+    const pv = D.vals[r.id][i - 1];
+    return { ...r, prev: pv ? energyPrice(r.m, pv, allowZero)?.v : null };
+  });
+}
+
+function renderTop() {
+  const general = (m) => m.mt === 'General';
+  const cards = [
+    ...[12, 24, 6, 36, 0].map((t) => ({
+      title: t === 0 ? 'Kiinteä, toistaiseksi voimassa' : `Kiinteä ${t} kk`,
+      unit: 'c/kWh',
+      rows: topList((m, c) => category(m, c) === 'fixed' && general(m) && m.term === t),
+      view: 'fixed',
+    })),
+    {
+      title: 'Pörssisähkö – marginaali',
+      unit: 'c/kWh + pörssihinta',
+      rows: topList((m) => m.pm === 'Spot' && general(m), true),
+      view: 'spot',
+    },
+  ];
+  const html = cards.map((c) => {
+    const best = c.rows[0]?.pr.v;
+    const items = c.rows.map((r, k) => {
+      const diff = k === 0 ? '<span class="top-best">Halvin</span>' : `<span class="muted">+${fmt(r.pr.v - best)}</span>`;
+      const tags = [r.alsoSite ? 'myös yhtiön sivu' : '', r.m.src === 'site' ? 'yhtiön sivu' : '', r.m.newOnly ? 'vain uusille' : '', !r.m.nat ? 'alueellinen' : '', r.m.dr ? 'toimitusvelvollinen' : '']
+        .filter(Boolean).map((x) => `<span class="badge">${x}</span>`).join('');
+      const name = r.m.link ? `<a href="${esc(r.m.link)}" target="_blank" rel="noopener">${esc(r.m.n.replace(' (yhtiön sivu)', ''))}</a>` : esc(r.m.n);
+      return `<li class="${k === 0 ? 'first' : ''}"><span class="rank">${k + 1}</span>
+        <div class="who"><strong>${esc(short(r.m.c))}</strong><div class="prod">${name}${tags}</div></div>
+        <div class="val"><strong>${r.pr.txt}</strong>${deltaHtml(r.pr.v, r.prev)}<div>${diff}</div></div></li>`;
+    }).join('');
+    return `<div class="top-card"><div class="top-head"><h3>${c.title}</h3><span class="muted">${c.unit}</span></div>
+      ${c.rows.length ? `<ol class="top-list">${items}</ol>` : '<p class="muted">Ei sopimuksia.</p>'}
+      <button class="icon-btn top-more" data-goto="${c.view}">Kaikki sopimukset →</button></div>`;
+  }).join('');
+  $('#topGrid').innerHTML = html;
+  $('#topSub').innerHTML = `Tilanne <strong>${fmtSnap(D.snaps[D.latest])}</strong> · ${S.tg === 'Household' ? 'kotitaloudet, hinnat sis. alv 25,5 %' : 'yritykset, hinnat yleensä alv 0 %'}. Viisi halvinta kussakin sopimustyypissä (yleissähkö, c/kWh); kultakin yhtiöltä sen halvin sopimus. Kuukausimaksuja ei huomioida.`;
+}
+
 function renderSpot() {
   const i = D.latest;
   const q = $('#spotSearch').value.trim().toLowerCase();
@@ -605,6 +671,7 @@ function getChart(el) {
 // ---------------------------------------------------------------------------
 function render() {
   if (!D) return;
+  if (S.view === 'top') renderTop();
   if (S.view === 'fixed') renderFixed();
   if (S.view === 'spot') renderSpot();
   if (S.view === 'other') renderOther();
@@ -614,7 +681,10 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('button, th[data-sort], tr[data-open]');
   if (!t) return;
   const ds = t.dataset;
-  if (ds.view) {
+  if (ds.goto) {
+    document.querySelector(`nav.tabs button[data-view="${ds.goto}"]`).click();
+    window.scrollTo(0, 0);
+  } else if (ds.view) {
     S.view = ds.view;
     document.querySelectorAll('nav.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b === t)));
     document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${S.view}`));
@@ -684,6 +754,7 @@ document.addEventListener('change', (e) => {
   }
 });
 
+document.getElementById('topNational').addEventListener('change', render);
 ['fixedSearch', 'spotSearch', 'otherSearch'].forEach((id) => document.getElementById(id).addEventListener('input', render));
 window.addEventListener('resize', () => Object.values(charts).forEach((c) => !c.isDisposed() && c.resize()));
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
@@ -703,7 +774,7 @@ function statusText() {
 (async function init() {
   try { const th = localStorage.getItem('theme'); if (th) document.documentElement.dataset.theme = th; } catch { /* ignore */ }
   const hash = location.hash.slice(1);
-  if (['fixed', 'spot', 'other'].includes(hash)) document.querySelector(`nav.tabs button[data-view="${hash}"]`).click();
+  if (['top', 'fixed', 'spot', 'other'].includes(hash)) document.querySelector(`nav.tabs button[data-view="${hash}"]`).click();
   try {
     const [hist, fc] = await Promise.all([
       fetch('data/history.json', { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error(`history.json: HTTP ${r.status}`); return r.json(); }),

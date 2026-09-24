@@ -22,7 +22,8 @@
         <button class="icon-btn" id="themeBtn" title="Vaihda teema" aria-label="Vaihda teema">◐</button>
       </div>
       <nav class="tabs" role="tablist">
-        <button role="tab" data-view="fixed" aria-selected="true">Kiinteähintaiset</button>
+        <button role="tab" data-view="top" aria-selected="true">Top 5</button>
+        <button role="tab" data-view="fixed" aria-selected="false">Kiinteähintaiset</button>
         <button role="tab" data-view="spot" aria-selected="false">Pörssisähkö</button>
         <button role="tab" data-view="other" aria-selected="false">Muut sopimukset</button>
       </nav>
@@ -32,8 +33,19 @@
   <main class="wrap">
     <div id="loadError" class="card note error hidden"></div>
 
+    <!-- TOP 5 -->
+    <div id="view-top" class="view">
+      <section class="card">
+        <h2>Top 5 halvimmat juuri nyt</h2>
+        <p class="sub" id="topSub">Viisi halvinta sopimusta kussakin sopimustyypissä (yleissähkö, c/kWh). Kultakin yhtiöltä näytetään sen halvin sopimus. Kuukausimaksuja ei huomioida.</p>
+        <div class="controls"><label class="chk"><input type="checkbox" id="topNational"> Piilota alueelliset ja toimitusvelvolliset sopimukset (usein saatavilla vain oman sähköverkon alueella)</label></div>
+        <div id="topGrid" class="top-grid"></div>
+        <p class="hint">Nuoli = muutos edelliseen keruuhetkeen. ”+x,xx” = ero kortin halvimpaan. Merkintä ”myös yhtiön sivu” = sama hinta luettu myös yhtiön omalta sivulta.</p>
+      </section>
+    </div>
+
     <!-- KIINTEÄHINTAISET -->
-    <div id="view-fixed" class="view">
+    <div id="view-fixed" class="view hidden">
       <section class="card">
         <h2>Kiinteähintaiset sopimukset</h2>
         <p class="sub">Energian hinta c/kWh yhtiöittäin, halvin sopimus kullakin kestolla. Kuukausimaksuja ei huomioida. Avaa yhtiön rivi nähdäksesi kaikki sopimukset. Nuoli kertoo muutoksen edelliseen keruuhetkeen.</p>
