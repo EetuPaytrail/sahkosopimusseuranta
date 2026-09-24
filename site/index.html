@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="fi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sähkösopimusseuranta</title>
+  <meta name="description" content="Suomen sähkösopimusten hinnat ja niiden kehitys, päivitetään klo 9 ja 17.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M18 2 6 18h8l-2 12 12-16h-8z' fill='%23eda100'/></svg>">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div class="top-row">
+        <div class="brand">⚡ Sähkösopimusseuranta<small>Energiaviraston hintavertailu + 8 yhtiön omat sivut · päivitys klo 9 ja 17</small></div>
+        <div class="seg" role="group" aria-label="Asiakasryhmä">
+          <button data-tg="Household" aria-pressed="true">Kotitaloudet</button>
+          <button data-tg="Company" aria-pressed="false">Yritykset (alv 0 %)</button>
+        </div>
+        <div class="status" id="status">Ladataan…</div>
+        <button class="icon-btn" id="themeBtn" title="Vaihda teema" aria-label="Vaihda teema">◐</button>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-view="fixed" aria-selected="true">Kiinteähintaiset</button>
+        <button role="tab" data-view="spot" aria-selected="false">Pörssisähkö</button>
+        <button role="tab" data-view="other" aria-selected="false">Muut sopimukset</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="loadError" class="card note error hidden"></div>
+
+    <!-- KIINTEÄHINTAISET -->
+    <div id="view-fixed" class="view">
+      <section class="card">
+        <h2>Kiinteähintaiset sopimukset</h2>
+        <p class="sub">Energian hinta c/kWh yhtiöittäin, halvin sopimus kullakin kestolla. Kuukausimaksuja ei huomioida. Avaa yhtiön rivi nähdäksesi kaikki sopimukset. Nuoli kertoo muutoksen edelliseen keruuhetkeen.</p>
+        <div class="controls">
+          <span><span class="ctl-label">Mittaus</span>
+            <span class="seg" role="group" id="fixedMetering">
+              <button data-mt="General" aria-pressed="true">Yleissähkö</button>
+              <button data-mt="Time" aria-pressed="false">Aikasähkö (päivä / yö)</button>
+              <button data-mt="Season" aria-pressed="false">Kausisähkö (talvipäivä / muu)</button>
+            </span>
+          </span>
+          <span><span class="ctl-label">Lähde</span>
+            <span class="seg" role="group" id="fixedSource">
+              <button data-src="all" aria-pressed="true">Kaikki</button>
+              <button data-src="api" aria-pressed="false">Energiavirasto</button>
+              <button data-src="site" aria-pressed="false">Yhtiöiden sivut</button>
+            </span>
+          </span>
+          <input type="search" id="fixedSearch" placeholder="Hae yhtiötä…" aria-label="Hae yhtiötä">
+        </div>
+        <div class="table-scroll short"><table id="fixedTable"></table></div>
+        <p class="hint">Korostettu solu = sarakkeen halvin. ”Muu kesto” näyttää esim. 18 kk sopimukset.</p>
+      </section>
+      <section class="card">
+        <h2>Lähteiden vertailu</h2>
+        <p class="sub">Yhtiöiden omilta sivuilta luetut hinnat verrattuna Energiaviraston tietoihin (yleissähkö, kotitaloudet, c/kWh). Ero-sarake korostuu, jos lähteet eivät täsmää.</p>
+        <div class="table-scroll short"><table id="sourceTable"></table></div>
+        <p class="hint" id="sourceStatus"></p>
+      </section>
+      <section class="card">
+        <h2>Hintahistoria</h2>
+        <p class="sub">Halvin hinta yhtiöittäin ja kestoittain jokaisella keruuhetkellä (c/kWh). Lähdevalinta yllä rajaa myös historian.</p>
+        <div class="controls">
+          <span class="ctl-label">Kestot</span>
+          <span id="fixedTerms"></span>
+        </div>
+        <div id="fixedHistory"></div>
+      </section>
+    </div>
+
+    <!-- PÖRSSISÄHKÖ -->
+    <div id="view-spot" class="view hidden">
+      <section class="card">
+        <h2>Pörssisähkön hintaennuste</h2>
+        <p class="sub">Toteutunut pörssihinta ja ennuste noin viikoksi eteenpäin (c/kWh, sis. alv). Ennuste: <a href="https://sahkovatkain.web.app" target="_blank" rel="noopener">Sähkövatkain</a>, toteutuneet hinnat: <a href="https://sahkotin.fi" target="_blank" rel="noopener">Sähkötin</a>.</p>
+        <div id="forecastChart" class="chart"></div>
+        <p class="hint" id="forecastMeta"></p>
+      </section>
+      <section class="card">
+        <h2>Pörssisähkösopimukset</h2>
+        <p class="sub">Marginaali c/kWh pörssihinnan päälle. Kuukausimaksuja ei huomioida. Nuoli kertoo muutoksen edelliseen keruuhetkeen.</p>
+        <div class="controls"><input type="search" id="spotSearch" placeholder="Hae yhtiötä tai sopimusta…" aria-label="Hae"></div>
+        <div class="table-scroll"><table id="spotTable"></table></div>
+      </section>
+      <section class="card">
+        <h2>Marginaalihistoria</h2>
+        <p class="sub">Halvin marginaali yhtiöittäin jokaisella keruuhetkellä (c/kWh).</p>
+        <div id="spotHistory"></div>
+      </section>
+    </div>
+
+    <!-- MUUT -->
+    <div id="view-other" class="view hidden">
+      <section class="card">
+        <h2>Muut sopimustyypit</h2>
+        <p class="sub">Kulutusvaikutteiset ja hybridisopimukset (esim. Välkky, Duo, Vaikuttaja), kiinteät kuukausipaketit ja muut erikoishinnoittelut. Hinnat c/kWh, kuukausimaksuja ei huomioida.</p>
+        <div class="controls">
+          <span class="seg" role="group" id="otherType">
+            <button data-ot="all" aria-pressed="true">Kaikki</button>
+            <button data-ot="hybrid" aria-pressed="false">Kulutusvaikutteiset / hybridit</button>
+            <button data-ot="package" aria-pressed="false">Paketit</button>
+          </span>
+          <input type="search" id="otherSearch" placeholder="Hae yhtiötä tai sopimusta…" aria-label="Hae">
+        </div>
+        <div class="table-scroll"><table id="otherTable"></table></div>
+      </section>
+      <section class="card">
+        <h2>Hintahistoria</h2>
+        <p class="sub">Sopimuskohtainen energiahinta jokaisella keruuhetkellä (c/kWh).</p>
+        <div id="otherHistory"></div>
+      </section>
+    </div>
+
+    <footer>
+      Lähteet: <a href="https://www.sahkonhinta.fi" target="_blank" rel="noopener">Energiaviraston sähkön hintavertailu</a> (sopimukset), yhtiöiden omat sivut (Helen, Oomi, Hehku, Cheap Energy, Väre, Vaasan Sähkö, Aalto, PKS; kiinteät määräaikaiset),
+      <a href="https://sahkovatkain.web.app" target="_blank" rel="noopener">Sähkövatkain</a> (hintaennuste),
+      <a href="https://sahkotin.fi" target="_blank" rel="noopener">Sähkötin</a> (toteutuneet pörssihinnat).
+      Mukana ovat yhtiöt, jotka ilmoittavat sopimuksensa Energiavirastolle. Tarkista lopulliset ehdot aina myyjältä.
+      Kotitalouksien hinnat sis. alv 25,5 %, yritysten hinnat yleensä alv 0 %.
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

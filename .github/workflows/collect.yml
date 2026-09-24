@@ -1,0 +1,63 @@
+name: Kerää sähkösopimukset
+
+on:
+  schedule:
+    # Klo 9 ja 17 Suomen aikaa. Ajetaan sekä kesä- että talviajan UTC-hetkinä;
+    # skripti tallentaa kunkin keruuhetken vain kerran.
+    - cron: '0 6,7,14,15 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Tallenna tilannekuva heti'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Asenna riippuvuudet
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Kerää data
+        run: node scripts/collect.mjs ${{ inputs.force && '--force' || '' }}
+      - name: Tallenna muutokset
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data
+          if ! git diff --cached --quiet; then
+            git commit -m "Päivitä hintadata $(TZ=Europe/Helsinki date '+%-d.%-m.%Y %H:%M')"
+            git push
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: collect
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

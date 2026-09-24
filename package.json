@@ -1,0 +1,14 @@
+{
+  "name": "sahkosopimukset",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "collect": "node scripts/collect.mjs",
+    "collect:now": "node scripts/collect.mjs --force",
+    "seed": "node scripts/seed.mjs",
+    "serve": "node scripts/serve.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}
