@@ -3,8 +3,18 @@
 // ---------------------------------------------------------------------------
 // Tila ja apufunktiot
 // ---------------------------------------------------------------------------
+function loadPref(key, fallback) {
+  try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; }
+}
+function savePref(key, v) {
+  try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* ei tallennusta */ }
+}
+
 const S = {
-  tg: 'Household',
+  tg: loadPref('tg', 'Household'),
+  national: loadPref('national', false), // piilota alueelliset ja toimitusvelvolliset (Tänään)
+  topSel: 't12',
+  sheet: null, // avoinna oleva paneeli: { type: 'company', company } | { type: 'settings' }
   view: 'top',
   mt: 'General',
   src: 'all', // all | api | site
@@ -27,6 +37,18 @@ const COMP_LABEL = {
 };
 const MT_LABEL = { General: 'Yleissähkö', Time: 'Aikasähkö', Season: 'Kausisähkö' };
 const MAX_CHART = 8;
+
+// Suosikit: yhtiöiden täydet nimet, tallennetaan selaimeen
+const FAV = new Set(loadPref('favs', []));
+const isFav = (c) => FAV.has(c);
+const favShort = () => new Set([...FAV].map((c) => short(c)));
+function toggleFav(c) {
+  if (FAV.has(c)) FAV.delete(c); else FAV.add(c);
+  savePref('favs', [...FAV]);
+}
+const starHtml = (c) => `<span class="star${isFav(c) ? ' on' : ''}" role="button" tabindex="0" data-fav="${esc(c)}" aria-pressed="${isFav(c)}" title="${isFav(c) ? 'Poista suosikeista' : 'Lisää suosikiksi'}">${isFav(c) ? '★' : '☆'}</span>`;
+const cleanName = (n) => n.replace(' (yhtiön sivu)', '');
+let installPrompt = null;
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -52,13 +74,16 @@ const helsinkiDate = (ms) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europ
 // ---------------------------------------------------------------------------
 // Datan purku
 // ---------------------------------------------------------------------------
+// Energiavirasto antaa sopimukselle uuden tunnisteen aina, kun yhtiö julkaisee
+// sen uudelleen. Saman sopimuksen tunnisteet yhdistetään yhdeksi sarjaksi, jotta
+// hintamuutokset ja historia eivät katkea. Päällekkäisistä valitaan uusin versio.
+const productKey = (m) => [m.c, m.n, m.term, m.mt, m.tg, m.pm, m.src || '', m.nat, m.dr, m.newOnly, m.seed ? 'seed' : ''].join('|');
+
 function expand(history) {
   const snaps = history.snapshots;
   const N = snaps.length;
-  const metas = {};
-  const vals = {};
+  const groups = new Map();
   for (const [id, p] of Object.entries(history.products)) {
-    metas[id] = p.m;
     const arr = new Array(N).fill(null);
     let k = 0;
     let cur = null;
@@ -66,11 +91,23 @@ function expand(history) {
       while (k < p.h.length && p.h[k][0] <= i) cur = p.h[k++][1];
       arr[i] = cur;
     }
-    vals[id] = arr;
+    const key = productKey(p.m);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ m: p.m, arr, first: arr.findIndex(Boolean), last: arr.findLastIndex(Boolean) });
+  }
+  const metas = {};
+  const vals = {};
+  for (const [key, members] of groups) {
+    members.sort((a, b) => b.first - a.first); // uusin versio ensin
+    vals[key] = Array.from({ length: N }, (_, i) => members.find((x) => x.arr[i])?.arr[i] || null);
+    metas[key] = members.reduce((a, b) => (b.last > a.last ? b : a)).m;
   }
   let latest = N - 1;
   for (let i = N - 1; i >= 0; i--) if (snaps[i].src === 'api') { latest = i; break; }
-  return { snaps, metas, vals, ids: Object.keys(metas), latest };
+  const firstApi = snaps.findIndex((x) => x.src === 'api');
+  const first = {};
+  for (const id of Object.keys(vals)) first[id] = vals[id].findIndex(Boolean);
+  return { snaps, metas, vals, ids: Object.keys(metas), latest, first, firstApi };
 }
 
 const isPackage = (comps) => !comps.length || comps.every((c) => c[1] === 0) || comps.some((c) => c[2] && c[2].includes('kWh'));
@@ -212,34 +249,30 @@ function renderFixed() {
   const getters = { name: (r) => short(r[0]) };
   for (const b of cols) getters[b] = (r) => r[1][b]?.v;
   rows = sortRows(rows, S.sort.fixed, getters);
+  rows = [...rows.filter(([c]) => isFav(c)), ...rows.filter(([c]) => !isFav(c))];
 
-  const list = productsAt(i, (m, c) => category(m, c) === 'fixed' && m.mt === S.mt && srcOk(m));
   let html = `<thead><tr>${sortHeader('fixed', 'name', 'Yhtiö', 'sticky-col')}${cols.map((b) => sortHeader('fixed', b, b === 'other' ? 'Muu kesto' : TERM_LABEL(b), 'num')).join('')}</tr></thead><tbody>`;
+  let cards = '';
   for (const [c, r] of rows) {
-    const open = S.open.has(`fixed|${c}`);
-    html += `<tr class="company-row${open ? ' open' : ''}" data-open="fixed|${esc(c)}"><td class="sticky-col"><strong>${esc(short(c))}</strong></td>`;
+    html += `<tr class="company-row" data-company="${esc(c)}"><td class="sticky-col"><strong>${esc(short(c))}</strong> ${starHtml(c)}</td>`;
+    const chips = [];
     for (const b of cols) {
       const cell = r[b];
       if (!cell) { html += '<td class="num muted">–</td>'; continue; }
       const isBest = best[b] != null && Math.abs(cell.v - best[b]) < 1e-9;
       const extra = b === 'other' ? ` <span class="muted">(${cell.term ?? '?'} kk)</span>` : '';
-      html += `<td class="num${isBest ? ' best' : ''}">${cell.txt}${extra}${deltaHtml(cell.v, prev.get(c)?.[b]?.v)}</td>`;
+      const d = deltaHtml(cell.v, prev.get(c)?.[b]?.v);
+      html += `<td class="num${isBest ? ' best' : ''}">${cell.txt}${extra}${d}</td>`;
+      chips.push(`<div class="term-chip${isBest ? ' best' : ''}"><span>${b === 'other' ? `${cell.term ?? '?'} kk` : TERM_LABEL(b)}</span><b>${cell.txt}</b>${d}</div>`);
     }
     html += '</tr>';
-    if (open) {
-      const prods = list.filter((p) => p.m.c === c).sort((a, b) => (a.m.term ?? 99) - (b.m.term ?? 99));
-      html += `<tr class="detail-row"><td colspan="${cols.length + 1}"><table class="prod-list">${prods.map((p) => {
-        const pr = energyPrice(p.m, p.comps);
-        const pv = D.vals[p.id][i - 1];
-        const pp = pv ? energyPrice(p.m, pv) : null;
-        return `<tr><td>${esc(p.m.n)}${badges(p.m, p.comps)}</td><td>${p.m.term === 0 ? 'Toistaiseksi' : `${p.m.term ?? '?'} kk`}</td><td class="num"><strong>${pr?.txt ?? ''}</strong>${deltaHtml(pr?.v, pp?.v)} c/kWh</td><td>${linkHtml(p.m)}</td></tr>`;
-      }).join('')}</table></td></tr>`;
-    }
+    cards += `<div class="mcard" role="button" tabindex="0" data-company="${esc(c)}"><div class="co">${esc(short(c))} ${starHtml(c)}</div><div class="term-chips">${chips.join('')}</div></div>`;
   }
   if (!rows.length) html += `<tr><td colspan="${cols.length + 1}" class="muted">Ei sopimuksia valituilla ehdoilla.</td></tr>`;
   $('#fixedTable').innerHTML = html + '</tbody>';
+  $('#fixedCards').innerHTML = cards || '<p class="muted">Ei sopimuksia valituilla ehdoilla.</p>';
 
-  $('#fixedTerms').innerHTML = TERMS.map((t) => `<label class="chk" style="margin-right:12px"><input type="checkbox" data-term="${t}" ${S.fixedTerms.has(t) ? 'checked' : ''}> ${TERM_LABEL(t)}</label>`).join('');
+  $('#fixedTerms').innerHTML = TERMS.map((t) => `<label><input type="checkbox" data-term="${t}" ${S.fixedTerms.has(t) ? 'checked' : ''}>${TERM_LABEL(t)}</label>`).join('');
 
   // Historia
   const companies = new Set();
@@ -257,7 +290,8 @@ function renderFixed() {
     series,
     defaultChart: (visible) => {
       const byName = visible.filter((s) => s.label === TERM_LABEL(firstTerm));
-      const pref = byName.filter((s) => prefer.includes(s.group));
+      const favs = favShort();
+      const pref = byName.filter((s) => favs.has(s.group)).length ? byName.filter((s) => favs.has(s.group)) : byName.filter((s) => prefer.includes(s.group));
       return (pref.length ? pref : cheapest(byName)).slice(0, MAX_CHART).map((s) => s.key);
     },
     resetKey: `${S.tg}|${S.mt}|${S.src}|${[...S.fixedTerms].join(',')}`,
@@ -296,6 +330,13 @@ function renderSources() {
   $('#sourceTable').innerHTML = html + '</tbody>';
   const st = D.snaps[i].sites;
   $('#sourceStatus').textContent = st ? `Viimeisin luku (${fmtSnap(D.snaps[i])}): ${Object.entries(st).map(([k, v]) => `${k} ${v.startsWith('ok') ? '✓' : `✗ (${v})`}`).join(' · ')}` : '';
+}
+
+// Kaavion oletussarjat: suosikit ensin, sitten halvimmat
+function favFirst(visible) {
+  const favs = favShort();
+  const f = visible.filter((x) => favs.has(x.group));
+  return [...f, ...cheapest(visible).filter((x) => !f.includes(x))].slice(0, MAX_CHART).map((x) => x.key);
 }
 
 function cheapest(series) {
@@ -383,13 +424,11 @@ const TOP_N = 5;
 
 // Halvin sopimus per yhtiö, TOP_N halvinta. Yhtiön sivun ja Energiaviraston
 // samanhintaiset rivit yhdistetään (näytetään Energiaviraston tuotenimi).
-function topList(pred, allowZero) {
-  const i = D.latest;
+function topList(pred, allowZero, i = D.latest, n = TOP_N) {
   const byCompany = new Map();
-  const nationalOnly = $('#topNational').checked;
   for (const p of productsAt(i, pred)) {
     if (p.m.seed) continue;
-    if (nationalOnly && (!p.m.nat || p.m.dr)) continue;
+    if (S.national && (!p.m.nat || p.m.dr)) continue;
     const pr = energyPrice(p.m, p.comps, allowZero);
     if (!pr) continue;
     const cur = byCompany.get(p.m.c);
@@ -401,51 +440,155 @@ function topList(pred, allowZero) {
       else if (cur.m.src === 'site') byCompany.set(p.m.c, { ...p, pr, alsoSite: true });
     }
   }
-  return [...byCompany.values()].sort((a, b) => a.pr.v - b.pr.v).slice(0, TOP_N).map((r) => {
+  const now = Date.parse(D.snaps[i].t);
+  return [...byCompany.values()].sort((a, b) => a.pr.v - b.pr.v).slice(0, n).map((r) => {
     const pv = D.vals[r.id][i - 1];
-    return { ...r, prev: pv ? energyPrice(r.m, pv, allowZero)?.v : null };
+    const f = D.first[r.id];
+    const isNew = f > D.firstApi && now - Date.parse(D.snaps[f].t) < 3 * 86400000;
+    return { ...r, prev: pv ? energyPrice(r.m, pv, allowZero)?.v : null, isNew };
   });
 }
 
+const TOP_CARDS = [
+  { key: 't12', title: 'Kiinteä 12 kk', label: '12 kk', term: 12 },
+  { key: 't24', title: 'Kiinteä 24 kk', label: '24 kk', term: 24 },
+  { key: 't6', title: 'Kiinteä 6 kk', label: '6 kk', term: 6 },
+  { key: 't36', title: 'Kiinteä 36 kk', label: '36 kk', term: 36 },
+  { key: 't0', title: 'Kiinteä, toistaiseksi', label: 'Toistaiseksi', term: 0 },
+  { key: 'spot', title: 'Pörssisähkö – marginaali', label: 'Pörssi', spot: true },
+];
+const cardPred = (c) => (c.spot
+  ? (m) => m.pm === 'Spot' && m.mt === 'General'
+  : (m, cs) => category(m, cs) === 'fixed' && m.mt === 'General' && m.term === c.term);
+
+function sparkSvg(vals, color, fill) {
+  if (vals.length < 2) return '';
+  const w = 120; const h = 40;
+  const min = Math.min(...vals); const max = Math.max(...vals); const r = max - min || 1;
+  const pts = vals.map((v, i) => [(i / (vals.length - 1)) * w, h - 3 - ((v - min) / r) * (h - 6)]);
+  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${fill ? `<path d="${d}L${w},${h}L0,${h}Z" fill="${color}" opacity="0.18"/>` : ''}<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+// Halvimman hinnan kehitys viimeiset 30 päivää (yksi arvo per keruu)
+function trendFor(card, days = 30) {
+  const end = Date.parse(D.snaps[D.latest].t);
+  const pts = [];
+  for (let i = 0; i <= D.latest; i++) {
+    const sn = D.snaps[i];
+    if (sn.src !== 'api' || end - Date.parse(sn.t) > days * 86400000) continue;
+    const r = topList(cardPred(card), !!card.spot, i, 1)[0];
+    if (r) pts.push(r.pr.v);
+  }
+  return pts;
+}
+
+const hourOf = (ms) => Number(new Intl.DateTimeFormat('fi-FI', { timeZone: 'Europe/Helsinki', hour: 'numeric', hourCycle: 'h23' }).format(new Date(ms)));
+
+// Pörssihinta nyt + päivän tunnit (toteutunut, puuttuvat tunnit ennusteesta)
+function spotToday() {
+  if (!forecast) return null;
+  const now = Date.now();
+  const today = helsinkiDate(now);
+  const hours = new Map();
+  for (const [t, v] of forecast.prediction || []) if (v != null && helsinkiDate(t) === today) hours.set(t, { v, est: true });
+  for (const [t, v] of forecast.realized || []) if (helsinkiDate(t) === today) hours.set(t, { v, est: false });
+  const pts = [...hours].sort((a, b) => a[0] - b[0]);
+  if (!pts.length) return null;
+  const cur = pts.filter(([t]) => t <= now).at(-1) || pts[0];
+  const avg = pts.reduce((sum, p) => sum + p[1].v, 0) / pts.length;
+  const rest = pts.filter(([t]) => t >= cur[0]);
+  const cheap = rest.reduce((a, b) => (b[1].v < a[1].v ? b : a), rest[0]);
+  return { t: cur[0], v: cur[1].v, est: cur[1].est, avg, cheap, series: pts.map((p) => p[1].v) };
+}
+
+function topRow(r, k, best) {
+  const tags = [];
+  if (r.isNew) tags.push('<span class="badge new">Uusi</span>');
+  if (r.prev != null && r.pr.v < r.prev - 0.005) tags.push(`<span class="badge good">▼ ${fmt(r.prev - r.pr.v)}</span>`);
+  if (r.prev != null && r.pr.v > r.prev + 0.005) tags.push(`<span class="badge bad">▲ ${fmt(r.pr.v - r.prev)}</span>`);
+  if (!r.m.nat) tags.push('<span class="badge">alueellinen</span>');
+  if (r.m.dr) tags.push('<span class="badge">toimitusvelv.</span>');
+  if (r.m.newOnly) tags.push('<span class="badge">vain uusille</span>');
+  const diff = k === 0 ? '<span class="top-best">Halvin</span>' : `+${fmt(r.pr.v - best)}`;
+  return `<li class="${k === 0 ? 'first' : ''}"><div class="row-btn" role="button" tabindex="0" data-company="${esc(r.m.c)}">
+    <span class="rank">${k + 1}</span>
+    <div class="who"><div class="co">${esc(short(r.m.c))}${starHtml(r.m.c)}${tags.join('')}</div><div class="prod">${esc(cleanName(r.m.n))}${r.alsoSite ? ' · myös yhtiön sivulla' : ''}</div></div>
+    <div class="price">${r.pr.txt}<small>${diff}</small></div></div></li>`;
+}
+
+function companyBest(c, pred, allowZero) {
+  let b = null;
+  for (const p of productsAt(D.latest, (m, cs) => m.c === c && !m.seed && pred(m, cs))) {
+    const pr = energyPrice(p.m, p.comps, allowZero);
+    if (pr && (!b || pr.v < b.v)) b = pr;
+  }
+  return b;
+}
+
 function renderTop() {
-  const general = (m) => m.mt === 'General';
-  const cards = [
-    ...[12, 24, 6, 36, 0].map((t) => ({
-      title: t === 0 ? 'Kiinteä, toistaiseksi voimassa' : `Kiinteä ${t} kk`,
-      unit: 'c/kWh',
-      rows: topList((m, c) => category(m, c) === 'fixed' && general(m) && m.term === t),
-      view: 'fixed',
-    })),
-    {
-      title: 'Pörssisähkö – marginaali',
-      unit: 'c/kWh + pörssihinta',
-      rows: topList((m) => m.pm === 'Spot' && general(m), true),
-      view: 'spot',
-    },
-  ];
-  const html = cards.map((c) => {
-    const best = c.rows[0]?.pr.v;
-    const items = c.rows.map((r, k) => {
-      const diff = k === 0 ? '<span class="top-best">Halvin</span>' : `<span class="muted">+${fmt(r.pr.v - best)}</span>`;
-      const tags = [r.alsoSite ? 'myös yhtiön sivu' : '', r.m.src === 'site' ? 'yhtiön sivu' : '', r.m.newOnly ? 'vain uusille' : '', !r.m.nat ? 'alueellinen' : '', r.m.dr ? 'toimitusvelvollinen' : '']
-        .filter(Boolean).map((x) => `<span class="badge">${x}</span>`).join('');
-      const name = r.m.link ? `<a href="${esc(r.m.link)}" target="_blank" rel="noopener">${esc(r.m.n.replace(' (yhtiön sivu)', ''))}</a>` : esc(r.m.n);
-      return `<li class="${k === 0 ? 'first' : ''}"><span class="rank">${k + 1}</span>
-        <div class="who"><strong>${esc(short(r.m.c))}</strong><div class="prod">${name}${tags}</div></div>
-        <div class="val"><strong>${r.pr.txt}</strong>${deltaHtml(r.pr.v, r.prev)}<div>${diff}</div></div></li>`;
-    }).join('');
-    return `<div class="top-card"><div class="top-head"><h3>${c.title}</h3><span class="muted">${c.unit}</span></div>
-      ${c.rows.length ? `<ol class="top-list">${items}</ol>` : '<p class="muted">Ei sopimuksia.</p>'}
-      <button class="icon-btn top-more" data-goto="${c.view}">Kaikki sopimukset →</button></div>`;
-  }).join('');
-  $('#topGrid').innerHTML = html;
+  const cards = TOP_CARDS.map((c) => ({ ...c, rows: topList(cardPred(c), !!c.spot) }));
+  const by = Object.fromEntries(cards.map((c) => [c.key, c]));
+
+  // Tunnuslukulaatat
+  const kpi = (key, label, withTrend) => {
+    const c = by[key];
+    const r = c.rows[0];
+    if (!r) return `<div class="kpi"><div class="k">${label}</div><div class="v">–</div></div>`;
+    const tr = withTrend ? trendFor(c) : [];
+    const d = tr.length > 1 ? r.pr.v - tr[0] : null;
+    const delta = d != null && Math.abs(d) >= 0.005 ? `<span class="pill-delta ${d > 0 ? 'up' : 'down'}" title="Muutos 30 päivässä">${d > 0 ? '▲' : '▼'}${fmt(Math.abs(d))}</span>` : '';
+    return `<button class="kpi" data-topsel="${key}"><div class="k">${label}</div><div class="v">${fmt(r.pr.v)}<small>c/kWh</small></div>
+      <div class="who">${esc(short(r.m.c))}${delta}</div>${sparkSvg(tr, css(d > 0 ? '--up' : '--down'))}</button>`;
+  };
+  const sp = spotToday();
+  const hero = sp
+    ? `<button class="kpi hero" data-goto="spot"><div class="k">Pörssisähkö nyt · klo ${hourOf(sp.t)}–${(hourOf(sp.t) + 1) % 24}${sp.est ? ' (ennuste)' : ''}</div>
+        <div class="v">${fmt(sp.v)}<small>c/kWh</small></div>
+        <div class="who">Päivän keskihinta ${fmt(sp.avg)} c · halvin klo ${hourOf(sp.cheap[0])} (${fmt(sp.cheap[1].v)} c)</div>${sparkSvg(sp.series, css('--hero-num'), true)}</button>`
+    : '<div class="kpi hero"><div class="k">Pörssisähkö nyt</div><div class="v">–</div><div class="who">Hintatietoa ei saatu</div></div>';
+  $('#kpis').innerHTML = hero + kpi('t12', 'Halvin 12 kk', true) + kpi('t24', 'Halvin 24 kk', true)
+    + kpi('spot', 'Halvin marginaali', false) + kpi('t0', 'Halvin toistaiseksi', false);
+
+  // Kampanjabanneri
   const act = activeCampaigns();
   const names = [...new Set(act.map((o) => short(o.company)))];
-  $('#topCampaign').classList.toggle('hidden', !names.length);
+  const banner = $('#topCampaign');
+  banner.className = names.length ? '' : 'hidden';
   if (names.length) {
-    $('#topCampaign').innerHTML = `🏷️ <strong>Kampanjoita käynnissä:</strong> ${names.map(esc).join(', ')} – ${[...new Set(act.map((o) => o.keyword).filter(Boolean))].map(esc).join(', ')}. <button class="link-btn" data-goto="campaigns">Katso kampanjat →</button>`;
+    const kw = [...new Set(act.map((o) => o.keyword).filter(Boolean))][0] || 'Kampanja';
+    const period = act.map((o) => o.period).find(Boolean);
+    banner.innerHTML = `<button class="banner" data-goto="campaigns"><span class="tag">${esc(kw)}</span>
+      <div><b>${names.map(esc).join(', ')}</b><span class="txt">${names.length === 1 ? 'Kampanja käynnissä' : `${names.length} yhtiöllä kampanja`}${period ? ` · ${esc(period)}` : ''}</span></div><span class="go">›</span></button>`;
   }
-  $('#topSub').innerHTML = `Tilanne <strong>${fmtSnap(D.snaps[D.latest])}</strong> · ${S.tg === 'Household' ? 'kotitaloudet, hinnat sis. alv 25,5 %' : 'yritykset, hinnat yleensä alv 0 %'}. Viisi halvinta kussakin sopimustyypissä (yleissähkö, c/kWh); kultakin yhtiöltä sen halvin sopimus. Kuukausimaksuja ei huomioida.`;
+
+  // Suosikit
+  const favs = [...FAV].filter((c) => D.ids.some((id) => D.metas[id].c === c));
+  $('#favSection').classList.toggle('hidden', !favs.length);
+  $('#favList').innerHTML = favs.sort((a, b) => short(a).localeCompare(short(b), 'fi')).map((c) => {
+    const p12 = companyBest(c, cardPred(by.t12));
+    const p24 = companyBest(c, cardPred(by.t24));
+    const ps = companyBest(c, cardPred(by.spot), true);
+    const cell = (l, p) => `<div><span>${l}</span><b>${p ? fmt(p.v) : '–'}</b></div>`;
+    return `<div class="fav" role="button" tabindex="0" data-company="${esc(c)}"><div class="co">${esc(short(c))} ${starHtml(c)}</div>
+      <div class="fav-prices">${cell('12 kk', p12)}${cell('24 kk', p24)}${cell('Marginaali', ps)}</div></div>`;
+  }).join('');
+
+  // Top 5 -kortit (mobiilissa yksi kerrallaan)
+  $('#topSeg').innerHTML = cards.map((c) => `<button data-topsel="${c.key}" aria-pressed="${c.key === S.topSel}">${c.label}</button>`).join('');
+  const segSel = $('#topSeg [aria-pressed="true"]');
+  if (segSel) $('#topSeg').scrollLeft = segSel.offsetLeft - 24;
+  $('#topGrid').innerHTML = cards.map((c) => {
+    const best = c.rows[0]?.pr.v;
+    return `<div class="top-card${c.key === S.topSel ? ' sel' : ''}" id="top-${c.key}">
+      <div class="top-head"><h3>${c.title}</h3><span class="muted">${c.spot ? 'marginaali c/kWh' : 'c/kWh'}</span></div>
+      ${c.rows.length ? `<ol class="top-list">${c.rows.map((r, k) => topRow(r, k, best)).join('')}</ol>` : '<p class="muted">Ei sopimuksia.</p>'}
+      <button class="icon-btn top-more" data-goto="${c.spot ? 'spot' : 'fixed'}">Kaikki sopimukset →</button></div>`;
+  }).join('');
+
+  const d = new Date(Date.parse(D.snaps[D.latest].t));
+  const day = d.toLocaleDateString('fi-FI', { weekday: 'long', day: 'numeric', month: 'numeric' });
+  $('#topSub').textContent = `${day.charAt(0).toUpperCase()}${day.slice(1)} · ${S.tg === 'Household' ? 'kotitaloudet · sis. alv 25,5 %' : 'yritykset · yleensä alv 0 %'}${S.national ? ' · vain koko Suomi' : ''}`;
 }
 
 function renderSpot() {
@@ -462,10 +605,16 @@ function renderSpot() {
   for (const r of rows) {
     const pp = r.prev ? energyPrice(r.m, r.prev, true) : null;
     const isBest = Math.abs(r.pr.v - best) < 1e-9;
-    html += `<tr><td class="sticky-col"><strong>${esc(short(r.m.c))}</strong></td><td class="name-cell">${esc(r.m.n)}</td><td class="num${isBest ? ' best' : ''}">${r.pr.txt}${deltaHtml(r.pr.v, pp?.v)}</td><td>${r.m.term === 0 ? 'Toistaiseksi' : `${r.m.term ?? '?'} kk`}</td><td>${MT_LABEL[r.m.mt] || ''}</td><td class="wrap-cell">${badges(r.m, r.comps)}</td><td>${linkHtml(r.m)}</td></tr>`;
+    html += `<tr class="company-row" data-company="${esc(r.m.c)}"><td class="sticky-col"><strong>${esc(short(r.m.c))}</strong> ${starHtml(r.m.c)}</td><td class="name-cell">${esc(r.m.n)}</td><td class="num${isBest ? ' best' : ''}">${r.pr.txt}${deltaHtml(r.pr.v, pp?.v)}</td><td>${r.m.term === 0 ? 'Toistaiseksi' : `${r.m.term ?? '?'} kk`}</td><td>${MT_LABEL[r.m.mt] || ''}</td><td class="wrap-cell">${badges(r.m, r.comps)}</td><td>${linkHtml(r.m)}</td></tr>`;
   }
   if (!rows.length) html += '<tr><td colspan="7" class="muted">Ei sopimuksia.</td></tr>';
   $('#spotTable').innerHTML = html + '</tbody>';
+  $('#spotCards').innerHTML = rows.map((r) => {
+    const pp = r.prev ? energyPrice(r.m, r.prev, true) : null;
+    return `<div class="mcard" role="button" tabindex="0" data-company="${esc(r.m.c)}"><div class="mcard-top"><div class="co">${esc(short(r.m.c))} ${starHtml(r.m.c)}</div>
+      <div class="price">${r.pr.txt}${deltaHtml(r.pr.v, pp?.v)}</div></div><div class="prod">${esc(r.m.n)} · ${r.m.term === 0 ? 'toistaiseksi' : `${r.m.term ?? '?'} kk`}</div>
+      <div class="tags-row">${badges(r.m, r.comps)}</div></div>`;
+  }).join('') || '<p class="muted">Ei sopimuksia.</p>';
 
   const companies = new Set();
   for (let k = 0; k < D.snaps.length; k++) for (const c of spotAgg(k).keys()) companies.add(c);
@@ -474,7 +623,7 @@ function renderSpot() {
   renderHistory('spotHistory', {
     series,
     flat: true,
-    defaultChart: (visible) => cheapest(visible).slice(0, MAX_CHART).map((s) => s.key),
+    defaultChart: favFirst,
     resetKey: S.tg,
   });
   renderForecast();
@@ -542,10 +691,10 @@ function renderForecast() {
       axisLabel: { color: text, formatter: (v) => fmt(v).replace(',00', '') },
       splitLine: { lineStyle: { color: css('--grid') } },
     },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 8, borderColor: css('--border'), textStyle: { color: text } }],
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 8, borderColor: css('--border'), fillerColor: css('--accent-soft'), textStyle: { color: text } }],
     series: [
-      { name: 'Toteutunut', type: 'bar', data: realized, barWidth: '70%', itemStyle: { color: css('--s1'), borderRadius: [2, 2, 0, 0] } },
-      { name: 'Ennuste', type: 'line', data: pred, showSymbol: false, lineStyle: { width: 2, color: css('--s2') }, itemStyle: { color: css('--s2') }, areaStyle: { color: css('--s2'), opacity: 0.08 } },
+      { name: 'Toteutunut', type: 'bar', data: realized, barWidth: '70%', itemStyle: { color: css('--accent'), borderRadius: [3, 3, 0, 0] } },
+      { name: 'Ennuste', type: 'line', data: pred, showSymbol: false, lineStyle: { width: 2, color: css('--s1') }, itemStyle: { color: css('--s1') }, areaStyle: { color: css('--s1'), opacity: 0.1 } },
       { name: 'Päivän keskihinta', type: 'line', data: daily, showSymbol: false, connectNulls: false, lineStyle: { width: 1.5, type: 'dashed', color: css('--text-3') }, itemStyle: { color: css('--text-3') } },
     ],
   }, true);
@@ -576,10 +725,13 @@ function renderOther() {
     const kind = otherKind(r.m, r.comps);
     const pv = D.vals[r.id][i - 1];
     const changed = pv && JSON.stringify(pv) !== JSON.stringify(r.comps) ? '<span class="badge">muuttunut</span>' : '';
-    html += `<tr><td class="sticky-col"><strong>${esc(short(r.m.c))}</strong></td><td class="name-cell">${esc(r.m.n)}</td><td>${OTHER_LABEL[kind]}${r.m.mt !== 'General' ? ` <span class="muted">(${MT_LABEL[r.m.mt]})</span>` : ''}</td><td>${r.m.term === 0 ? 'Toistaiseksi' : `${r.m.term ?? '?'} kk`}</td><td>${compsText(r.m, r.comps)}${changed}</td><td class="wrap-cell">${badges(r.m, r.comps)}${r.m.info ? `<details class="info"><summary>Kuvaus</summary><p>${esc(r.m.info)}</p></details>` : ''}</td><td>${linkHtml(r.m)}</td></tr>`;
+    html += `<tr class="company-row" data-company="${esc(r.m.c)}"><td class="sticky-col"><strong>${esc(short(r.m.c))}</strong> ${starHtml(r.m.c)}</td><td class="name-cell">${esc(r.m.n)}</td><td>${OTHER_LABEL[kind]}${r.m.mt !== 'General' ? ` <span class="muted">(${MT_LABEL[r.m.mt]})</span>` : ''}</td><td>${r.m.term === 0 ? 'Toistaiseksi' : `${r.m.term ?? '?'} kk`}</td><td>${compsText(r.m, r.comps)}${changed}</td><td class="wrap-cell">${badges(r.m, r.comps)}${r.m.info ? `<details class="info"><summary>Kuvaus</summary><p>${esc(r.m.info)}</p></details>` : ''}</td><td>${linkHtml(r.m)}</td></tr>`;
   }
   if (!rows.length) html += '<tr><td colspan="7" class="muted">Ei sopimuksia.</td></tr>';
   $('#otherTable').innerHTML = html + '</tbody>';
+  $('#otherCards').innerHTML = rows.map((r) => `<div class="mcard" role="button" tabindex="0" data-company="${esc(r.m.c)}">
+    <div class="co">${esc(short(r.m.c))} ${starHtml(r.m.c)}</div><div class="prod">${esc(r.m.n)} · ${OTHER_LABEL[otherKind(r.m, r.comps)]} · ${r.m.term === 0 ? 'toistaiseksi' : `${r.m.term ?? '?'} kk`}</div>
+    <div class="prod" style="margin-top:6px">${compsText(r.m, r.comps)}</div><div class="tags-row">${badges(r.m, r.comps)}</div></div>`).join('') || '<p class="muted">Ei sopimuksia.</p>';
 
   const ids = new Set();
   for (let k = 0; k < D.snaps.length; k++) for (const p of productsAt(k, pred)) ids.add(p.id);
@@ -598,7 +750,7 @@ function renderOther() {
   }).sort((a, b) => a.group.localeCompare(b.group, 'fi') || a.label.localeCompare(b.label, 'fi'));
   renderHistory('otherHistory', {
     series,
-    defaultChart: (visible) => cheapest(visible).slice(0, MAX_CHART).map((s) => s.key),
+    defaultChart: favFirst,
     resetKey: `${S.tg}|${S.otherType}`,
   });
 }
@@ -753,44 +905,196 @@ function render() {
   if (S.view === 'fixed') renderFixed();
   if (S.view === 'spot') renderSpot();
   if (S.view === 'other') renderOther();
+  if (S.sheet) renderSheet();
+}
+
+// ---------------------------------------------------------------------------
+// Paneeli: yhtiön tiedot ja asetukset
+// ---------------------------------------------------------------------------
+function openSheet(state) {
+  S.sheet = state;
+  const el = $('#sheet');
+  el.hidden = false;
+  document.body.style.overflow = 'hidden';
+  renderSheet();
+  $('#sheetBody').parentElement.scrollTop = 0;
+}
+
+function closeSheet() {
+  const c = charts.sheetChart;
+  if (c && !c.isDisposed()) c.dispose();
+  delete charts.sheetChart;
+  S.sheet = null;
+  $('#sheet').hidden = true;
+  document.body.style.overflow = '';
+}
+
+function renderSheet() {
+  if (!S.sheet) return;
+  if (S.sheet.type === 'settings') renderSettingsSheet();
+  else renderCompanySheet(S.sheet.company);
+}
+
+function renderCompanySheet(c) {
+  const i = D.latest;
+  const all = productsAt(i, (m) => m.c === c && !m.seed);
+  const byTerm = (a, b) => (a.m.term ?? 99) - (b.m.term ?? 99);
+  const fixed = all.filter((p) => category(p.m, p.comps) === 'fixed').sort(byTerm);
+  const spot = all.filter((p) => p.m.pm === 'Spot');
+  const other = all.filter((p) => category(p.m, p.comps) === 'other' && p.m.pm !== 'Spot').sort(byTerm);
+  const row = (p, mode) => {
+    const pr = energyPrice(p.m, p.comps, mode === 'spot');
+    const pv = D.vals[p.id][i - 1];
+    const pp = pv ? energyPrice(p.m, pv, mode === 'spot') : null;
+    const meta = [p.m.term === 0 ? 'Toistaiseksi' : `${p.m.term ?? '?'} kk`, MT_LABEL[p.m.mt], mode === 'other' ? OTHER_LABEL[otherKind(p.m, p.comps)] : null].filter(Boolean).join(' · ');
+    const name = p.m.link ? `<a href="${esc(p.m.link)}" target="_blank" rel="noopener">${esc(cleanName(p.m.n))}</a>` : esc(cleanName(p.m.n));
+    const val = mode === 'other' ? `<div class="m" style="text-align:right">${compsText(p.m, p.comps)}</div>` : `<div class="price">${pr ? pr.txt : '–'}${deltaHtml(pr?.v, pp?.v)}</div>`;
+    return `<div class="sheet-row"><div><div class="n">${name}</div><div class="m">${meta}${badges(p.m, p.comps)}</div></div>${val}</div>`;
+  };
+  const camp = activeCampaigns().filter((o) => o.company === c);
+  const kws = [...new Set(camp.map((o) => o.keyword).filter(Boolean))];
+  $('#sheetBody').innerHTML = `
+    <h2 id="sheetTitle">${esc(short(c))} ${starHtml(c)}</h2>
+    <p class="sub">${all.length} sopimusta · ${S.tg === 'Household' ? 'kotitaloudet, sis. alv' : 'yritykset'} · tilanne ${fmtSnap(D.snaps[i])}</p>
+    ${camp.length ? `<button class="banner" data-goto="campaigns" style="margin:12px 0 4px"><span class="tag">${esc(kws[0] || 'Kampanja')}</span><div><b>Kampanja käynnissä</b><span class="txt">${esc(camp.map((o) => o.period).find(Boolean) || 'Katso kampanjat')}</span></div><span class="go">›</span></button>` : ''}
+    <h3>Kiinteiden hintojen kehitys</h3>
+    <div class="chart" id="sheetChart"></div>
+    ${fixed.length ? `<h3>Kiinteät</h3><div class="sheet-list">${fixed.map((p) => row(p, 'fixed')).join('')}</div>` : ''}
+    ${spot.length ? `<h3>Pörssisähkö (marginaali)</h3><div class="sheet-list">${spot.map((p) => row(p, 'spot')).join('')}</div>` : ''}
+    ${other.length ? `<h3>Muut sopimukset</h3><div class="sheet-list">${other.map((p) => row(p, 'other')).join('')}</div>` : ''}
+    <p class="hint">Hinnat c/kWh ilman kuukausimaksuja. Nuoli = muutos edelliseen keruuhetkeen.</p>`;
+
+  // Yhtiön halvin kiinteä hinta kestoittain kaikilta keruuhetkiltä
+  const terms = [12, 24, 0, 6, 36];
+  const data = Object.fromEntries(terms.map((t) => [t, []]));
+  for (let k = 0; k < D.snaps.length; k++) {
+    const best = {};
+    for (const p of productsAt(k, (m, cs) => m.c === c && m.mt === 'General' && category(m, cs) === 'fixed')) {
+      const pr = energyPrice(p.m, p.comps);
+      if (pr && terms.includes(p.m.term) && (best[p.m.term] == null || pr.v < best[p.m.term])) best[p.m.term] = pr.v;
+    }
+    for (const t of terms) data[t].push([Date.parse(D.snaps[k].t), best[t] ?? null]);
+  }
+  const used = terms.filter((t) => data[t].some((x) => x[1] != null));
+  const el = $('#sheetChart');
+  if (!window.echarts || !used.length) {
+    el.outerHTML = '<p class="muted">Ei kiinteitä yleissähkösopimuksia.</p>';
+    return;
+  }
+  const old = charts.sheetChart;
+  if (old && !old.isDisposed()) old.dispose();
+  const chart = echarts.init(el);
+  charts.sheetChart = chart;
+  const text = css('--text-2');
+  chart.setOption({
+    animation: false,
+    grid: { left: 44, right: 12, top: used.length > 1 ? 36 : 16, bottom: 28 },
+    legend: used.length > 1 ? { top: 0, textStyle: { color: text } } : { show: false },
+    tooltip: { trigger: 'axis', valueFormatter: (v) => (v == null ? '–' : `${fmt(v)} c/kWh`) },
+    xAxis: { type: 'time', axisLabel: { color: text, hideOverlap: true, formatter: { day: '{d}.{M}.', month: '{d}.{M}.', year: '{yyyy}', hour: '{HH}:{mm}' } }, axisLine: { lineStyle: { color: css('--border') } } },
+    yAxis: { type: 'value', scale: true, axisLabel: { color: text, formatter: (v) => fmt(v) }, splitLine: { lineStyle: { color: css('--grid') } } },
+    series: used.map((t) => {
+      const color = css(`--s${terms.indexOf(t) + 1}`);
+      return { name: TERM_LABEL(t), type: 'line', step: 'end', showSymbol: false, data: data[t], lineStyle: { width: 2, color }, itemStyle: { color } };
+    }),
+  });
+}
+
+function statusLong() {
+  const s = D.snaps[D.latest];
+  const now = helsinkiNow();
+  const mins = now.h * 60 + now.m;
+  const next = mins < 9 * 60 ? 'tänään klo 9' : mins < 17 * 60 ? 'tänään klo 17' : 'huomenna klo 9';
+  const n = D.ids.filter((id) => D.vals[id][D.latest]).length;
+  return `Päivitetty ${fmtSnap(s)} · ${n} sopimusta. Seuraava päivitys ${next} (voi myöhästyä).`;
+}
+
+function renderSettingsSheet() {
+  const theme = document.documentElement.dataset.theme || 'dark';
+  const pill = (attr, v, label, cur) => `<button data-${attr}="${v}" aria-pressed="${v === cur}">${label}</button>`;
+  $('#sheetBody').innerHTML = `
+    <h2 id="sheetTitle">Asetukset</h2>
+    <div class="set-group"><b>Tiedot</b><p>${D ? statusLong() : 'Ladataan…'}</p></div>
+    <div class="set-group"><b>Asiakasryhmä</b><div class="pills">${pill('tg', 'Household', 'Kotitaloudet', S.tg)}${pill('tg', 'Company', 'Yritykset (alv 0 %)', S.tg)}</div></div>
+    <div class="set-group"><b>Teema</b><div class="pills">${pill('themeset', 'dark', 'Tumma', theme)}${pill('themeset', 'light', 'Vaalea', theme)}${pill('themeset', 'system', 'Laitteen mukaan', theme)}</div></div>
+    <div class="set-group"><b>Tänään-näkymä</b><label class="chk"><input type="checkbox" id="setNational" ${S.national ? 'checked' : ''}> Piilota alueelliset ja toimitusvelvolliset sopimukset</label>
+      <p>Niitä saa yleensä vain oman sähköverkkoalueen asukkaat.</p></div>
+    <div class="set-group"><b>Suosikit</b><p>${FAV.size ? [...FAV].map((c) => esc(short(c))).join(', ') : 'Ei suosikkeja. Lisää yhtiö suosikiksi tähdellä ☆.'}</p></div>
+    <div class="set-group"><b>Asenna sovellukseksi</b>${installPrompt ? '<button class="icon-btn" data-install>Asenna Sähkövahti</button>' : ''}
+      <p>iPhone: avaa sivu Safarissa → Jaa → Lisää Koti-valikkoon. Android: Chromen valikko → Asenna sovellus.</p></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Tapahtumat
+// ---------------------------------------------------------------------------
+function selectView(view) {
+  S.view = view;
+  document.querySelectorAll('nav.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === view)));
+  document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
+  try { history.replaceState(null, '', `#${view}`); } catch { /* ignore */ }
+  window.scrollTo(0, 0);
+  render();
+}
+
+function setPressed(t) {
+  t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t)));
 }
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('button, th[data-sort], tr[data-open]');
+  const fav = e.target.closest('[data-fav]');
+  if (fav) {
+    e.stopPropagation();
+    toggleFav(fav.dataset.fav);
+    render();
+    return;
+  }
+  if (e.target.closest('[data-close]')) { closeSheet(); return; }
+  if (e.target.closest('[data-settings]')) { openSheet({ type: 'settings' }); return; }
+  const comp = e.target.closest('[data-company]');
+  if (comp && !e.target.closest('a')) { openSheet({ type: 'company', company: comp.dataset.company }); return; }
+
+  const t = e.target.closest('button, th[data-sort]');
   if (!t) return;
   const ds = t.dataset;
   if (ds.goto) {
-    document.querySelector(`nav.tabs button[data-view="${ds.goto}"]`).click();
-    window.scrollTo(0, 0);
+    if (S.sheet) closeSheet();
+    selectView(ds.goto);
   } else if (ds.view) {
-    S.view = ds.view;
-    document.querySelectorAll('nav.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b === t)));
-    document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${S.view}`));
-    try { history.replaceState(null, '', `#${S.view}`); } catch { /* ignore */ }
+    selectView(ds.view);
+  } else if (ds.topsel) {
+    S.topSel = ds.topsel;
     render();
+    const target = window.matchMedia('(max-width: 760px)').matches ? $('#topSeg') : document.getElementById(`top-${ds.topsel}`);
+    if (t.classList.contains('kpi') && target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
   } else if (ds.tg) {
     S.tg = ds.tg;
-    t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t)));
+    savePref('tg', S.tg);
+    setPressed(t);
     render();
+  } else if (ds.themeset) {
+    document.documentElement.dataset.theme = ds.themeset;
+    try { localStorage.setItem('theme', ds.themeset); } catch { /* ignore */ }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = getComputedStyle(document.body).backgroundColor;
+    render();
+  } else if ('install' in ds) {
+    if (installPrompt) installPrompt.prompt();
   } else if (ds.mt) {
     S.mt = ds.mt;
-    t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t)));
+    setPressed(t);
     render();
   } else if (ds.src) {
     S.src = ds.src;
-    t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t)));
+    setPressed(t);
     render();
   } else if (ds.ot) {
     S.otherType = ds.ot;
-    t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t)));
+    setPressed(t);
     render();
   } else if (ds.sort) {
     const [view, col] = ds.sort.split(':');
-    const s = S.sort[view];
-    if (s.col === col) s.dir *= -1; else { s.col = col; s.dir = 1; }
-    render();
-  } else if (ds.open) {
-    S.open.has(ds.open) ? S.open.delete(ds.open) : S.open.add(ds.open);
+    const st = S.sort[view];
+    if (st.col === col) st.dir *= -1; else { st.col = col; st.dir = 1; }
     render();
   } else if (ds.h) {
     const h = S.hist[ds.h];
@@ -805,54 +1109,91 @@ document.addEventListener('click', (e) => {
       else { alert(`Kaavioon mahtuu enintään ${MAX_CHART} sarjaa. Poista ensin jokin valinta.`); return; }
     } else return;
     render();
-  } else if (t.id === 'themeBtn') {
-    const cur = document.documentElement.dataset.theme;
-    const next = cur === 'dark' ? 'light' : cur === 'light' ? '' : 'dark';
-    if (next) document.documentElement.dataset.theme = next; else delete document.documentElement.dataset.theme;
-    try { localStorage.setItem('theme', next); } catch { /* ignore */ }
-    render();
+  }
+});
+
+// Näppäimistö: Enter/välilyönti painikkeiksi merkityille elementeille, Esc sulkee paneelin
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && S.sheet) { closeSheet(); return; }
+  const el = e.target;
+  if ((e.key === 'Enter' || e.key === ' ') && el.getAttribute?.('role') === 'button' && el.tagName !== 'BUTTON') {
+    e.preventDefault();
+    el.click();
   }
 });
 
 document.addEventListener('change', (e) => {
   const t = e.target;
   const ds = t.dataset;
-  if (ds.term != null) {
+  if (t.id === 'setNational') {
+    S.national = t.checked;
+    savePref('national', S.national);
+    render();
+  } else if (ds.term != null) {
     const v = Number(ds.term);
-    t.checked ? S.fixedTerms.add(v) : S.fixedTerms.delete(v);
+    if (t.checked) S.fixedTerms.add(v); else S.fixedTerms.delete(v);
     render();
   } else if (ds.h) {
     const h = S.hist[ds.h];
     if ('daily' in ds) h.daily = t.checked;
     else if (ds.group != null) {
-      if (!h.groups) h.groups = new Set(t.closest('.groups').querySelectorAll('input[data-group]').length ? [...t.closest('.groups').querySelectorAll('input[data-group]')].map((x) => x.dataset.group) : []);
-      t.checked ? h.groups.add(ds.group) : h.groups.delete(ds.group);
+      if (!h.groups) h.groups = new Set([...t.closest('.groups').querySelectorAll('input[data-group]')].map((x) => x.dataset.group));
+      if (t.checked) h.groups.add(ds.group); else h.groups.delete(ds.group);
     }
     render();
   }
 });
 
-document.getElementById('topNational').addEventListener('change', render);
+// Paneelin sulkeminen vetämällä alas (mobiili)
+(() => {
+  let y0 = null;
+  const panel = () => document.querySelector('.sheet-panel');
+  document.addEventListener('touchstart', (e) => {
+    const p = panel();
+    if (S.sheet && p && p.contains(e.target) && p.scrollTop <= 0) y0 = e.touches[0].clientY; else y0 = null;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (y0 == null) return;
+    const dy = e.touches[0].clientY - y0;
+    if (dy > 0) panel().style.transform = `translateY(${dy}px)`;
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (y0 == null) return;
+    const dy = e.changedTouches[0].clientY - y0;
+    const p = panel();
+    p.style.transform = '';
+    y0 = null;
+    if (dy > 120) closeSheet();
+  });
+})();
+
 ['fixedSearch', 'spotSearch', 'otherSearch'].forEach((id) => document.getElementById(id).addEventListener('input', render));
 window.addEventListener('resize', () => Object.values(charts).forEach((c) => !c.isDisposed() && c.resize()));
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  if (S.sheet?.type === 'settings') renderSheet();
+});
 
 // ---------------------------------------------------------------------------
 // Käynnistys
 // ---------------------------------------------------------------------------
-function statusText() {
+function updateStatusChip() {
   const s = D.snaps[D.latest];
-  const now = helsinkiNow();
-  const mins = now.h * 60 + now.m;
-  const next = mins < 9 * 60 ? 'tänään klo 9.00' : mins < 17 * 60 ? 'tänään klo 17.00' : 'huomenna klo 9.00';
-  const n = D.ids.filter((id) => D.vals[id][D.latest]).length;
-  return `Päivitetty <strong>${fmtSnap(s)}</strong> · ${n} sopimusta<br>Seuraava päivitys ${next}`;
+  const [d, t] = s.t.split('T');
+  const [, m, dd] = d.split('-').map(Number);
+  const chip = $('#status');
+  chip.querySelector('span').textContent = `${dd}.${m}. klo ${Number(t.slice(0, 2))}`;
+  const age = (Date.now() - Date.parse(s.t)) / 3600000;
+  chip.classList.toggle('stale', age > 16);
+  chip.title = statusLong();
 }
 
 (async function init() {
-  try { const th = localStorage.getItem('theme'); if (th) document.documentElement.dataset.theme = th; } catch { /* ignore */ }
   const hash = location.hash.slice(1);
-  if (['top', 'fixed', 'spot', 'other', 'campaigns'].includes(hash)) document.querySelector(`nav.tabs button[data-view="${hash}"]`).click();
+  if (['top', 'fixed', 'spot', 'other', 'campaigns'].includes(hash)) selectView(hash);
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
   try {
     const [hist, fc, camp] = await Promise.all([
       fetch('data/history.json', { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error(`history.json: HTTP ${r.status}`); return r.json(); }),
@@ -863,13 +1204,17 @@ function statusText() {
     forecast = fc;
     campaigns = camp;
     updateCampaignCount();
-    $('#status').innerHTML = statusText();
+    updateStatusChip();
     render();
-    if (forecast) { await loadLiveRealized(); if (S.view === 'spot') renderForecast(); }
+    if (forecast) {
+      await loadLiveRealized();
+      if (S.view === 'spot') renderForecast();
+      if (S.view === 'top') renderTop();
+    }
   } catch (err) {
     const box = $('#loadError');
     box.classList.remove('hidden');
     box.textContent = `Datan lataus epäonnistui: ${err.message}. Aja ensin "npm run collect:now".`;
-    $('#status').textContent = '';
+    $('#status span').textContent = 'Virhe';
   }
 }());

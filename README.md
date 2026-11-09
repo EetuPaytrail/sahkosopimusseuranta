@@ -1,14 +1,14 @@
-# Sähkösopimusseuranta
+# Sähkövahti (sähkösopimusseuranta)
 
 Verkkosivu, joka kerää klo 9.00 ja 17.00 kaikkien Energiaviraston hintavertailuun
 (sahkonhinta.fi) ilmoitettujen sähkösopimusten hinnat ja näyttää ne sekä niiden historian.
 
-**Näkymät**
+**Näkymät** (mobiilissa alapalkki, työpöydällä yläpalkki)
 
 - **Kiinteähintaiset** – yhtiöittäin halvin hinta: toistaiseksi voimassa, 6, 12, 24 ja 36 kk
   (yleis-, aika- tai kausisähkö). Historiataulukko + kaavio.
 - **Pörssisähkö** – Sähkövatkaimen hintaennuste, kaikkien pörssisopimusten marginaalit ja marginaalihistoria.
-- **Top 5** – viisi halvinta kussakin sopimustyypissä.
+- **Tänään** – tunnuslukulaatat (pörssihinta nyt, halvin 12/24 kk 30 pv trendillä, halvin marginaali ja toistaiseksi), kampanjailmoitus, suosikit ja Top 5 kussakin sopimustyypissä.
 - **Kampanjat** – Black Friday, Black Week, Black Month, Cyber Monday, Singles’ Day ym. tarjoukset (ks. alla).
 - **Muut sopimukset** – kulutusvaikutteiset/hybridit (Välkky, Duo, Vaikuttaja…), paketit ym. + historia.
 
@@ -27,6 +27,14 @@ Mukana ovat vain yhtiöt, jotka ilmoittavat sopimuksensa Energiavirastolle (täl
 Väre ei ilmoita sopimuksiaan palveluun (Väre myy nykyään Helenin sopimuksia), ja Aallolla ei ole siellä määräaikaisia – niiden hinnat tulevat yhtiöiden omilta sivuilta.
 
 Yhtiöiden sivujen hinnat näkyvät omina sopimuksinaan (merkintä ”Yhtiön sivu”), ja Kiinteähintaiset-näkymän **Lähteiden vertailu** näyttää, täsmäävätkö ne Energiaviraston tietoihin. Jos yhtiö uudistaa sivunsa, sen lukija voi lakata toimimasta – tila näkyy vertailutaulukon alla (✓ / ✗). Yksittäisen sivun voi testata: `node scripts/sites.mjs vaasa`.
+
+## Käyttöliittymä
+
+- Tyyli: tumma oletusteema ja sähkönkeltainen korostus (vaalea ja laitteen mukainen teema asetuksista).
+- Yhtiötä napauttamalla aukeaa paneeli (mobiilissa alhaalta nouseva), jossa yhtiön kaikki sopimukset ja kiinteiden hintojen kehitys.
+- Suosikit (☆) tallentuvat selaimeen; ne näkyvät Tänään-näkymässä, listojen kärjessä ja kaavioiden oletussarjoina.
+- Asennettava sovellus (PWA): `manifest.webmanifest`, `sw.js` ja `icons/`. Viimeksi ladatut hinnat näkyvät myös ilman verkkoyhteyttä.
+- Energiavirasto antaa sopimukselle uuden tunnisteen aina, kun se julkaistaan uudelleen; sivu yhdistää saman sopimuksen tunnisteet yhdeksi sarjaksi (`productKey` tiedostossa `site/app.js`).
 
 ## Kampanjahaku (Black Friday ym.)
 
