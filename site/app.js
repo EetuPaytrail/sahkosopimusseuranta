@@ -14,6 +14,7 @@ const S = {
   tg: loadPref('tg', 'Household'),
   national: loadPref('national', false), // piilota alueelliset ja toimitusvelvolliset (Tänään)
   topSel: 't12',
+  campTerm: 'all',
   sheet: null, // avoinna oleva paneeli: { type: 'company', company } | { type: 'settings' }
   view: 'top',
   mt: 'General',
@@ -380,12 +381,158 @@ function offerHtml(o, { compact = false } = {}) {
     ${first}${more}</div>`;
 }
 
+// ---------------------------------------------------------------------------
+// Kampanjasopimusten vertailu: kampanjateksteissä mainitut sopimukset hintoineen
+// ---------------------------------------------------------------------------
+const normTxt = (t) => t.toLowerCase().replace(/kuukau(tta|den|deksi|siksi)(?![a-zåäö])/g, 'kk').replace(/[-–—:()]/g, ' ').replace(/(\d)\s*kk/g, '$1 kk').replace(/\s+/g, ' ').trim();
+const escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\function renderCampaigns() {');
+// Tarjousta kuvaava ote (ei UKK-kysymys)
+const isOfferSnippet = (sn) => !/\?$/.test(sn.split(' · ')[0].trim()) && /tarjou|hintaan|etu|0\s*€|alennu|kampanjahint|ilmai/i.test(sn);
+
+function productBase(m) {
+  return normTxt(cleanName(m.n)).replace(/\b\d+\s*kk\b/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function productMatches(m, text) {
+  const base = productBase(m);
+  if (base.length < 4) return false;
+  const re = m.pm === 'FixedPrice' && m.term > 0
+    ? new RegExp(`(^|[^a-zåäö])${escRe(base)}\\s*${m.term}\\s*kk`)
+    : new RegExp(`(^|[^a-zåäö])${escRe(base)}(?![a-zåäö])`);
+  return re.test(text);
+}
+
+function benefitsOf(texts) {
+  const out = new Set();
+  for (const raw of texts) {
+    const t = normTxt(raw);
+    let m = t.match(/(kuukausi|perus)maksu\w*\s*0\s*(€|e)(?![\w,])[^.·]*?ensimmäis\w*\s*(\d+)\s*kk/);
+    if (m) out.add(`${m[1] === 'perus' ? 'Perusmaksu' : 'Kuukausimaksu'} 0 € ${m[3]} kk`);
+    m = t.match(/alennu\w*[^.·]{0,25}?(\d+[,.]\d+)\s*(snt|c)\s*\/\s*kwh/) || t.match(/(\d+[,.]\d+)\s*(snt|c)\s*\/\s*kwh[^.·]{0,25}alennu/);
+    if (m) out.add(`Alennus ${m[1].replace('.', ',')} c/kWh`);
+    m = t.match(/(\d+)\s*(€|e)(?![\w,])[^.·]{0,40}?lahjakort/);
+    if (m) out.add(`Arvonta: ${m[1]} € lahjakortti`);
+  }
+  return [...out];
+}
+
+// Kampanja-ajan alku (Date) tekstistä "2.11.2026–30.11.2026"
+function periodStart(period) {
+  const m = period?.match(/^(\d{1,2})\.(\d{1,2})?\.?(\d{4})?/);
+  if (!m) return null;
+  const end = period.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  const y = m[3] || end?.[3];
+  const mo = m[2] || end?.[2];
+  return y && mo ? new Date(Number(y), Number(mo) - 1, Number(m[1])) : null;
+}
+
+const CAMP_TERMS = [['all', 'Kaikki'], ['6', '6 kk'], ['12', '12 kk'], ['24', '24 kk'], ['36', '36 kk'], ['0', 'Toistaiseksi'], ['spot', 'Pörssi'], ['other', 'Muut']];
+const campBucket = (m) => (m.pm === 'Spot' ? 'spot' : m.pm !== 'FixedPrice' ? 'other' : [0, 6, 12, 24, 36].includes(m.term) ? String(m.term) : 'other');
+
+function campaignRows() {
+  const act = activeCampaigns();
+  const byCompany = new Map();
+  for (const o of act) {
+    if (!byCompany.has(o.company)) byCompany.set(o.company, []);
+    byCompany.get(o.company).push(o);
+  }
+  const i = D.latest;
+  const rows = [];
+  for (const [company, offers] of byCompany) {
+    const snippets = offers.flatMap((o) => (o.snippets || []).map((sn) => ({ sn, o })));
+    const offerSn = snippets.filter((x) => isOfferSnippet(x.sn));
+    const period = offers.map((o) => o.period).find(Boolean) || null;
+    const firstSeen = offers.map((o) => o.firstSeen).sort()[0];
+    const start = periodStart(period) || new Date(firstSeen);
+    const companyBenefits = benefitsOf(offerSn.map((x) => x.sn)).filter((b) => b.startsWith('Arvonta'));
+    const kw = [...new Set(offers.map((o) => o.keyword).filter(Boolean))][0] || 'Kampanja';
+    // Ennen kampanjaa: viimeinen keruu ennen alkupäivää
+    let before = -1;
+    for (let k = 0; k <= i; k++) if (Date.parse(D.snaps[k].t) < start.getTime()) before = k;
+
+    const found = new Map();
+    for (const p of productsAt(i, (m) => m.c === company && !m.seed)) {
+      const apiOffer = offers.find((o) => o.source === 'api' && o.title === cleanName(p.m.n));
+      const hits = apiOffer ? apiOffer.snippets.map((sn) => ({ sn, o: apiOffer })) : offerSn.filter((x) => productMatches(p.m, normTxt(x.sn)));
+      if (!hits.length) continue;
+      const allowZero = p.m.pm === 'Spot';
+      const pr = energyPrice(p.m, p.comps, allowZero);
+      if (!pr) continue;
+      // Sama sopimus Energiavirastolta ja yhtiön sivulta -> näytetään kerran (Energiavirasto ensin)
+      // Yksi rivi per sopimus ja kesto: yleissähkö ensin, Energiavirasto ennen yhtiön sivua
+      const dupKey = `${campBucket(p.m)}|${productBase(p.m)}|${p.m.term}`;
+      const cur = found.get(dupKey);
+      const score = (m) => (m.mt === 'General' ? 2 : 0) + (m.src === 'site' ? 0 : 1);
+      if (cur && score(cur.m) >= score(p.m)) continue;
+      const pv = before >= 0 ? D.vals[p.id][before] : null;
+      const prevPr = pv ? energyPrice(p.m, pv, allowZero) : null;
+      // Sijoitus kaikkien yhtiöiden saman keston sopimuksissa
+      const pred = p.m.pm === 'Spot'
+        ? (m) => m.pm === 'Spot' && m.mt === p.m.mt
+        : (m, cs) => category(m, cs) === category(p.m, p.comps) && m.mt === p.m.mt && m.term === p.m.term && m.pm === p.m.pm;
+      const list = topList(pred, allowZero, i, 999);
+      const rank = list.findIndex((r) => r.pr.v >= pr.v - 1e-9) + 1;
+      const benefits = [...benefitsOf(hits.map((x) => x.sn)), ...companyBenefits];
+      found.set(dupKey, {
+        id: p.id, m: p.m, comps: p.comps, pr, prev: prevPr, rank, of: list.length, best: list[0],
+        benefits: [...new Set(benefits)], period, start, kw, url: hits[0].o.url, bucket: campBucket(p.m),
+      });
+    }
+    rows.push(...found.values());
+  }
+  const order = ['6', '12', '24', '36', '0', 'spot', 'other'];
+  return rows.sort((a, b) => order.indexOf(a.bucket) - order.indexOf(b.bucket) || a.pr.v - b.pr.v);
+}
+
+function renderCampaignCompare() {
+  const all = campaignRows();
+  const present = new Set(all.map((r) => r.bucket));
+  if (S.campTerm !== 'all' && !present.has(S.campTerm)) S.campTerm = 'all';
+  $('#campTerm').innerHTML = CAMP_TERMS.filter(([k]) => k === 'all' || present.has(k))
+    .map(([k, l]) => `<button data-campterm="${k}" aria-pressed="${k === S.campTerm}">${l}${k === 'all' ? '' : ` <span class="muted">${all.filter((r) => r.bucket === k).length}</span>`}</button>`).join('');
+  const rows = all.filter((r) => S.campTerm === 'all' || r.bucket === S.campTerm);
+  const termTxt = (r) => (r.bucket === 'spot' ? 'Pörssi' : r.bucket === 'other' ? (OTHER_LABEL[otherKind(r.m, r.comps)] || 'Muu') : r.m.term === 0 ? 'Toistaiseksi' : `${r.m.term} kk`)
+    + (r.m.mt !== 'General' ? ` · ${MT_LABEL[r.m.mt]}` : '');
+  const status = (r) => (r.start > new Date() ? `<span class="badge new">Alkaa ${r.start.getDate()}.${r.start.getMonth() + 1}.</span>` : '<span class="badge good">Käynnissä</span>');
+  const change = (r) => {
+    if (!r.prev) return '<span class="muted">–</span>';
+    const d = r.pr.v - r.prev.v;
+    if (Math.abs(d) < 0.005) return '<span class="muted">ei muutosta</span>';
+    return `<span class="delta ${d > 0 ? 'up' : 'down'}" style="margin:0">${d > 0 ? '▲' : '▼'} ${fmt(Math.abs(d))}</span>`;
+  };
+  const rankTxt = (r) => `${r.rank}. / ${r.of}${r.rank > 1 && r.best ? `<div class="muted" style="font-size:11.5px">halvin ${esc(short(r.best.m.c))} ${r.best.pr.txt}</div>` : ''}`;
+  const benefitTxt = (r) => r.benefits.map((b) => `<span class="badge">${esc(b)}</span>`).join(' ') || '<span class="muted">–</span>';
+
+  let html = '<thead><tr><th class="sticky-col">Yhtiö</th><th>Sopimus</th><th>Kesto</th><th class="num">Hinta nyt</th><th class="num">Ennen</th><th class="num">Muutos</th><th class="num">Sija</th><th>Kampanjaetu</th><th>Kampanja</th></tr></thead><tbody>';
+  let lastBucket = null;
+  for (const r of rows) {
+    if (S.campTerm === 'all' && r.bucket !== lastBucket) {
+      html += `<tr><td colspan="9" style="background:var(--surface-2);font-weight:600;font-size:12.5px">${esc(CAMP_TERMS.find(([k]) => k === r.bucket)[1])}</td></tr>`;
+      lastBucket = r.bucket;
+    }
+    html += `<tr class="company-row" data-company="${esc(r.m.c)}"><td class="sticky-col"><strong>${esc(short(r.m.c))}</strong> ${starHtml(r.m.c)}</td>
+      <td class="name-cell">${r.m.link ? `<a href="${esc(r.m.link)}" target="_blank" rel="noopener">${esc(cleanName(r.m.n))}</a>` : esc(cleanName(r.m.n))}</td>
+      <td>${termTxt(r)}</td><td class="num"><strong>${r.pr.txt}</strong></td><td class="num">${r.prev ? r.prev.txt : '–'}</td><td class="num">${change(r)}</td>
+      <td class="num">${rankTxt(r)}</td><td class="wrap-cell">${benefitTxt(r)}</td>
+      <td>${status(r)} <a href="${esc(r.url)}" target="_blank" rel="noopener" class="muted">${esc(r.kw)}${r.period ? ` ${esc(r.period)}` : ''}</a></td></tr>`;
+  }
+  if (!rows.length) html += '<tr><td colspan="9" class="muted">Kampanjoista ei tunnistettu vielä yksittäisiä sopimuksia. Ne lisätään automaattisesti, kun yhtiöt julkaisevat tarjouksensa.</td></tr>';
+  $('#campTable').innerHTML = html + '</tbody>';
+  $('#campCards').innerHTML = rows.map((r) => `<div class="mcard" role="button" tabindex="0" data-company="${esc(r.m.c)}">
+      <div class="mcard-top"><div class="co">${esc(short(r.m.c))} ${starHtml(r.m.c)}</div><div class="price">${r.pr.txt}<small>${termTxt(r)}</small></div></div>
+      <div class="prod">${esc(cleanName(r.m.n))}</div>
+      <div class="term-chips"><div class="term-chip"><span>Ennen</span><b>${r.prev ? r.prev.txt : '–'}</b></div><div class="term-chip"><span>Muutos</span><b>${change(r)}</b></div><div class="term-chip"><span>Sija</span><b>${r.rank}. / ${r.of}</b></div></div>
+      <div class="tags-row">${status(r)}${r.benefits.map((b) => `<span class="badge">${esc(b)}</span>`).join('')}</div></div>`).join('')
+    || '<p class="muted">Kampanjoista ei tunnistettu vielä yksittäisiä sopimuksia.</p>';
+}
+
 function renderCampaigns() {
   if (!campaigns) {
     $('#campaignActive').innerHTML = '<p class="muted">Kampanjahakua ei ole vielä ajettu. Tiedot päivittyvät seuraavalla keruukerralla.</p>';
     $('#campaignPast').innerHTML = '';
     return;
   }
+  renderCampaignCompare();
   const act = activeCampaigns();
   const byCompany = new Map();
   for (const o of act) {
@@ -1061,6 +1208,9 @@ document.addEventListener('click', (e) => {
     selectView(ds.goto);
   } else if (ds.view) {
     selectView(ds.view);
+  } else if (ds.campterm) {
+    S.campTerm = ds.campterm;
+    render();
   } else if (ds.topsel) {
     S.topSel = ds.topsel;
     render();

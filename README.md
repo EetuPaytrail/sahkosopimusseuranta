@@ -43,6 +43,8 @@ seurattavat sopimussivut ja niiltä löytyvät kampanjalinkit (headless-selaimel
 Kampanjasanat (`KEYWORDS` tiedostossa) kattavat mm. Black Friday/Week/Weekend/Month/November, Musta perjantai, Cyber Monday/Week,
 Singles’ Day ja Sinkkupäivä. Löydöt tallentuvat tiedostoon `site/data/campaigns.json` ensimmäisen ja viimeisimmän havainnon kanssa.
 
+Kampanjat-sivun **vertailutaulukko** kytkee kampanjateksteissä mainitut sopimukset (esim. ”Optimi takuu 24 kk”) kerättyihin hintoihin: hinta nyt, hinta ennen kampanjan alkua, sijoitus saman keston sopimuksissa ja tekstistä poimittu kampanjaetu (esim. kuukausimaksu 0 € 12 kk). Taulukon voi suodattaa keston mukaan.
+
 Testaus: `node scripts/campaigns.mjs`
 
 ## Käyttö paikallisesti
