@@ -2,9 +2,9 @@ name: Kerää sähkösopimukset
 
 on:
   schedule:
-    # Klo 9 ja 17 Suomen aikaa. Ajetaan sekä kesä- että talviajan UTC-hetkinä;
-    # skripti tallentaa kunkin keruuhetken vain kerran.
-    - cron: '0 6,7,14,15 * * *'
+    # Klo 9 ja 17 Suomen aikaa. GitHubin ajastukset myöhästyvät usein tunteja, joten
+    # ajetaan tunnin välein; skripti tallentaa kunkin keruuhetken vain kerran.
+    - cron: '23 6-21 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -26,6 +26,8 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.save.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +41,7 @@ jobs:
       - name: Kerää data
         run: node scripts/collect.mjs ${{ inputs.force && '--force' || '' }}
       - name: Tallenna muutokset
+        id: save
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -46,14 +49,20 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "Päivitä hintadata $(TZ=Europe/Helsinki date '+%-d.%-m.%Y %H:%M')"
             git push
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/configure-pages@v5
+        if: steps.save.outputs.publish == 'true'
       - uses: actions/upload-pages-artifact@v3
+        if: steps.save.outputs.publish == 'true'
         with:
           path: site
 
   deploy:
     needs: collect
+    if: needs.collect.outputs.publish == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

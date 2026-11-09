@@ -16,6 +16,7 @@ const S = {
 };
 let D = null; // ladattu data
 let forecast = null;
+let campaigns = null;
 const charts = {};
 
 const TERMS = [0, 6, 12, 24, 36];
@@ -306,6 +307,76 @@ function cheapest(series) {
 // Pörssisähkö
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// Kampanjat (Black Friday ym.)
+// ---------------------------------------------------------------------------
+const activeCampaigns = () => (campaigns?.offers || []).filter((o) => o.lastSeen === campaigns.updatedAt);
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('fi-FI', { timeZone: 'Europe/Helsinki' }) : '');
+
+function updateCampaignCount() {
+  const n = new Set(activeCampaigns().map((o) => o.company)).size;
+  const el = $('#campaignCount');
+  el.textContent = n;
+  el.classList.toggle('hidden', !n);
+  el.title = `${n} yhtiöllä kampanja käynnissä`;
+}
+
+function highlight(text) {
+  let re;
+  try { re = new RegExp(campaigns.keywords, 'gi'); } catch { return esc(text); }
+  return esc(text).replace(re, (m) => `<mark>${m}</mark>`);
+}
+
+function offerHtml(o, { compact = false } = {}) {
+  const host = (() => { try { return new URL(o.url).hostname.replace(/^www\./, '') + new URL(o.url).pathname.replace(/\/$/, ''); } catch { return o.url; } })();
+  const snips = o.snippets || (o.snippet ? [o.snippet] : []);
+  const first = snips.slice(0, compact ? 1 : 2).map((x) => `<p class="snip">${highlight(x)}</p>`).join('');
+  const more = !compact && snips.length > 2
+    ? `<details class="info"><summary>${snips.length - 2} muuta mainintaa</summary>${snips.slice(2).map((x) => `<p class="snip">${highlight(x)}</p>`).join('')}</details>` : '';
+  const prices = (o.prices || []).map((p) => `<span class="badge">${esc(p)}</span>`).join('');
+  return `<div class="offer">
+    <div class="offer-head"><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.source === 'api' ? o.title : host)}</a>
+      ${o.source === 'api' ? '<span class="badge">Energiavirasto</span>' : ''}${o.contract ? `<span class="badge">${esc(o.contract)}</span>` : ''}${prices}</div>
+    ${first}${more}</div>`;
+}
+
+function renderCampaigns() {
+  if (!campaigns) {
+    $('#campaignActive').innerHTML = '<p class="muted">Kampanjahakua ei ole vielä ajettu. Tiedot päivittyvät seuraavalla keruukerralla.</p>';
+    $('#campaignPast').innerHTML = '';
+    return;
+  }
+  const act = activeCampaigns();
+  const byCompany = new Map();
+  for (const o of act) {
+    if (!byCompany.has(o.company)) byCompany.set(o.company, []);
+    byCompany.get(o.company).push(o);
+  }
+  const cards = [...byCompany.entries()].sort((a, b) => short(a[0]).localeCompare(short(b[0]), 'fi')).map(([c, offers]) => {
+    offers.sort((a, b) => (b.prices?.length || 0) - (a.prices?.length || 0));
+    const kws = [...new Set(offers.map((o) => o.keyword).filter(Boolean))];
+    const period = offers.map((o) => o.period).find(Boolean);
+    const since = offers.map((o) => o.firstSeen).sort()[0];
+    return `<div class="campaign-card">
+      <div class="campaign-head"><h3>${esc(short(c))}</h3>${kws.map((k) => `<span class="kw">${esc(k)}</span>`).join('')}</div>
+      <p class="campaign-meta">${period ? `Kampanja-aika <strong>${esc(period)}</strong> · ` : ''}Havaittu ensimmäisen kerran ${fmtDate(since)} · ${offers.length} sivua</p>
+      ${offers.map((o, k) => offerHtml(o, { compact: k >= 3 })).join('')}
+    </div>`;
+  });
+  $('#campaignActive').innerHTML = cards.length
+    ? `<div class="campaign-grid">${cards.join('')}</div>`
+    : '<p class="muted">Yhdeltäkään yhtiöltä ei löytynyt tällä hetkellä Black Friday- tai vastaavaa kampanjaa.</p>';
+
+  const past = (campaigns.offers || []).filter((o) => o.lastSeen !== campaigns.updatedAt);
+  $('#campaignPast').innerHTML = past.length
+    ? `<div class="table-scroll short"><table><thead><tr><th class="sticky-col">Yhtiö</th><th>Kampanja</th><th>Näkyvissä</th><th>Ote</th></tr></thead><tbody>${past.map((o) => `<tr><td class="sticky-col"><strong>${esc(short(o.company))}</strong></td><td>${esc(o.keyword || '')}</td><td>${fmtDate(o.firstSeen)} – ${fmtDate(o.lastSeen)}</td><td class="wrap-cell"><a href="${esc(o.url)}" target="_blank" rel="noopener">${highlight((o.snippets || [o.snippet || ''])[0].slice(0, 160))}</a></td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="muted">Ei vielä päättyneitä kampanjoita.</p>';
+
+  const without = (campaigns.checkedCompanies || []).filter((c) => !byCompany.has(c)).map(short);
+  $('#campaignSub').innerHTML = `Black Friday, Black Week, Black Month, Cyber Monday, Singles’ Day ym. tarjoukset sähköyhtiöiden verkkosivuilta ja Energiaviraston sopimustiedoista. Viimeisin haku <strong>${new Date(campaigns.updatedAt).toLocaleString('fi-FI', { timeZone: 'Europe/Helsinki' })}</strong>: ${campaigns.checkedPages} sivua, ${(campaigns.checkedCompanies || []).length} yhtiötä, kampanja ${byCompany.size} yhtiöllä.`;
+  $('#campaignChecked').innerHTML = `Ei kampanjaa: ${without.map(esc).join(', ') || '–'}.${campaigns.failedPages?.length ? ` Sivua ei saatu luettua: ${campaigns.failedPages.map((p) => esc(short(p.company))).join(', ')}.` : ''} Verkkosivuilta haetaan yhtiöiden etusivut, seurattavat sopimussivut ja niiltä löytyvät kampanjalinkit.`;
+}
+
+// ---------------------------------------------------------------------------
 // Top 5
 // ---------------------------------------------------------------------------
 const TOP_N = 5;
@@ -368,6 +439,12 @@ function renderTop() {
       <button class="icon-btn top-more" data-goto="${c.view}">Kaikki sopimukset →</button></div>`;
   }).join('');
   $('#topGrid').innerHTML = html;
+  const act = activeCampaigns();
+  const names = [...new Set(act.map((o) => short(o.company)))];
+  $('#topCampaign').classList.toggle('hidden', !names.length);
+  if (names.length) {
+    $('#topCampaign').innerHTML = `🏷️ <strong>Kampanjoita käynnissä:</strong> ${names.map(esc).join(', ')} – ${[...new Set(act.map((o) => o.keyword).filter(Boolean))].map(esc).join(', ')}. <button class="link-btn" data-goto="campaigns">Katso kampanjat →</button>`;
+  }
   $('#topSub').innerHTML = `Tilanne <strong>${fmtSnap(D.snaps[D.latest])}</strong> · ${S.tg === 'Household' ? 'kotitaloudet, hinnat sis. alv 25,5 %' : 'yritykset, hinnat yleensä alv 0 %'}. Viisi halvinta kussakin sopimustyypissä (yleissähkö, c/kWh); kultakin yhtiöltä sen halvin sopimus. Kuukausimaksuja ei huomioida.`;
 }
 
@@ -672,6 +749,7 @@ function getChart(el) {
 function render() {
   if (!D) return;
   if (S.view === 'top') renderTop();
+  if (S.view === 'campaigns') renderCampaigns();
   if (S.view === 'fixed') renderFixed();
   if (S.view === 'spot') renderSpot();
   if (S.view === 'other') renderOther();
@@ -774,14 +852,17 @@ function statusText() {
 (async function init() {
   try { const th = localStorage.getItem('theme'); if (th) document.documentElement.dataset.theme = th; } catch { /* ignore */ }
   const hash = location.hash.slice(1);
-  if (['top', 'fixed', 'spot', 'other'].includes(hash)) document.querySelector(`nav.tabs button[data-view="${hash}"]`).click();
+  if (['top', 'fixed', 'spot', 'other', 'campaigns'].includes(hash)) document.querySelector(`nav.tabs button[data-view="${hash}"]`).click();
   try {
-    const [hist, fc] = await Promise.all([
+    const [hist, fc, camp] = await Promise.all([
       fetch('data/history.json', { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error(`history.json: HTTP ${r.status}`); return r.json(); }),
       fetch('data/forecast.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('data/campaigns.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     D = expand(hist);
     forecast = fc;
+    campaigns = camp;
+    updateCampaignCount();
     $('#status').innerHTML = statusText();
     render();
     if (forecast) { await loadLiveRealized(); if (S.view === 'spot') renderForecast(); }

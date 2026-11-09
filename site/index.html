@@ -26,6 +26,7 @@
         <button role="tab" data-view="fixed" aria-selected="false">Kiinteähintaiset</button>
         <button role="tab" data-view="spot" aria-selected="false">Pörssisähkö</button>
         <button role="tab" data-view="other" aria-selected="false">Muut sopimukset</button>
+        <button role="tab" data-view="campaigns" aria-selected="false">Kampanjat <span class="tab-count hidden" id="campaignCount"></span></button>
       </nav>
     </div>
   </header>
@@ -39,6 +40,7 @@
         <h2>Top 5 halvimmat juuri nyt</h2>
         <p class="sub" id="topSub">Viisi halvinta sopimusta kussakin sopimustyypissä (yleissähkö, c/kWh). Kultakin yhtiöltä näytetään sen halvin sopimus. Kuukausimaksuja ei huomioida.</p>
         <div class="controls"><label class="chk"><input type="checkbox" id="topNational"> Piilota alueelliset ja toimitusvelvolliset sopimukset (usein saatavilla vain oman sähköverkon alueella)</label></div>
+        <div id="topCampaign" class="campaign-banner hidden"></div>
         <div id="topGrid" class="top-grid"></div>
         <p class="hint">Nuoli = muutos edelliseen keruuhetkeen. ”+x,xx” = ero kortin halvimpaan. Merkintä ”myös yhtiön sivu” = sama hinta luettu myös yhtiön omalta sivulta.</p>
       </section>
@@ -127,6 +129,21 @@
         <p class="sub">Sopimuskohtainen energiahinta jokaisella keruuhetkellä (c/kWh).</p>
         <div id="otherHistory"></div>
       </section>
+    </div>
+
+    <!-- KAMPANJAT -->
+    <div id="view-campaigns" class="view hidden">
+      <section class="card">
+        <h2>Black Friday ja muut kampanjat</h2>
+        <p class="sub" id="campaignSub">Black Friday, Black Week, Black Month, Cyber Monday, Singles’ Day ym. tarjoukset sähköyhtiöiden verkkosivuilta ja Energiaviraston sopimustiedoista. Haetaan jokaisella keruukerralla.</p>
+        <div id="campaignActive"></div>
+      </section>
+      <section class="card">
+        <h2>Aiemmin havaitut</h2>
+        <p class="sub">Kampanjat, jotka eivät enää näy yhtiöiden sivuilla.</p>
+        <div id="campaignPast"></div>
+      </section>
+      <p class="hint" id="campaignChecked"></p>
     </div>
 
     <footer>

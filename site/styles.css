@@ -205,3 +205,25 @@ td.name-cell { white-space: normal; min-width: 220px; max-width: 420px; }
 .top-best { font-size: 11.5px; font-weight: 600; color: var(--accent); }
 .top-more { margin-top: auto; align-self: flex-start; font-size: 13px; }
 @media (max-width: 700px) { .top-grid { grid-template-columns: 1fr; } }
+
+/* Kampanjat */
+.tab-count {
+  display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 99px;
+  background: var(--s2); color: #fff; font-size: 11.5px; line-height: 18px; text-align: center;
+}
+.campaign-banner {
+  background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 14px;
+}
+.link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font-weight: 600; }
+.campaign-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; }
+.campaign-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: var(--surface); }
+.campaign-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.campaign-head h3 { margin: 0; font-size: 16px; }
+.kw { background: var(--text); color: var(--surface); font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; letter-spacing: 0.02em; }
+.campaign-meta { color: var(--text-2); font-size: 13px; margin: 6px 0 10px; }
+.offer { border-top: 1px solid var(--border); padding: 10px 0 4px; }
+.offer-head { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.offer-head .badge { font-weight: 400; }
+.snip { font-size: 13px; color: var(--text-2); margin: 6px 0 0; overflow-wrap: anywhere; }
+mark { background: color-mix(in srgb, var(--s4) 35%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
+@media (max-width: 700px) { .campaign-grid { grid-template-columns: 1fr; } }

@@ -8,6 +8,8 @@ Verkkosivu, joka kerää klo 9.00 ja 17.00 kaikkien Energiaviraston hintavertail
 - **Kiinteähintaiset** – yhtiöittäin halvin hinta: toistaiseksi voimassa, 6, 12, 24 ja 36 kk
   (yleis-, aika- tai kausisähkö). Historiataulukko + kaavio.
 - **Pörssisähkö** – Sähkövatkaimen hintaennuste, kaikkien pörssisopimusten marginaalit ja marginaalihistoria.
+- **Top 5** – viisi halvinta kussakin sopimustyypissä.
+- **Kampanjat** – Black Friday, Black Week, Black Month, Cyber Monday, Singles’ Day ym. tarjoukset (ks. alla).
 - **Muut sopimukset** – kulutusvaikutteiset/hybridit (Välkky, Duo, Vaikuttaja…), paketit ym. + historia.
 
 Kuukausimaksuja ei huomioida missään. Kotitalouksien ja yritysten sopimukset erotellaan (yritysten hinnat yleensä alv 0 %).
@@ -25,6 +27,15 @@ Mukana ovat vain yhtiöt, jotka ilmoittavat sopimuksensa Energiavirastolle (täl
 Väre ei ilmoita sopimuksiaan palveluun (Väre myy nykyään Helenin sopimuksia), ja Aallolla ei ole siellä määräaikaisia – niiden hinnat tulevat yhtiöiden omilta sivuilta.
 
 Yhtiöiden sivujen hinnat näkyvät omina sopimuksinaan (merkintä ”Yhtiön sivu”), ja Kiinteähintaiset-näkymän **Lähteiden vertailu** näyttää, täsmäävätkö ne Energiaviraston tietoihin. Jos yhtiö uudistaa sivunsa, sen lukija voi lakata toimimasta – tila näkyy vertailutaulukon alla (✓ / ✗). Yksittäisen sivun voi testata: `node scripts/sites.mjs vaasa`.
+
+## Kampanjahaku (Black Friday ym.)
+
+`scripts/campaigns.mjs` käy jokaisella keruukerralla läpi kaikkien Energiavirastolla mukana olevien yhtiöiden etusivut,
+seurattavat sopimussivut ja niiltä löytyvät kampanjalinkit (headless-selaimella), sekä Energiaviraston sopimusten nimet ja kuvaukset.
+Kampanjasanat (`KEYWORDS` tiedostossa) kattavat mm. Black Friday/Week/Weekend/Month/November, Musta perjantai, Cyber Monday/Week,
+Singles’ Day ja Sinkkupäivä. Löydöt tallentuvat tiedostoon `site/data/campaigns.json` ensimmäisen ja viimeisimmän havainnon kanssa.
+
+Testaus: `node scripts/campaigns.mjs`
 
 ## Käyttö paikallisesti
 
@@ -45,7 +56,7 @@ npm run serve         # http://localhost:8080
 3. Workflow `.github/workflows/collect.yml` ajaa keruun ajastetusti, commitoi datan ja julkaisee sivun.
    Voit ajaa sen myös käsin: **Actions → Kerää sähkösopimukset → Run workflow**.
 
-GitHubin ajastukset voivat viivästyä 5–30 min, joten keruuhetki voi toteutua esim. klo 9.15.
+GitHubin ajastukset voivat viivästyä jopa tunteja, joten workflow ajetaan tunnin välein ja skripti tallentaa klo 9 keruun viimeistään klo 16 ja klo 17 keruun viimeistään keskiyöllä. Sivu julkaistaan uudelleen vain, kun data muuttuu.
 
 ## Data
 

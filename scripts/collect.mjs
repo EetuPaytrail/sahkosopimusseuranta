@@ -4,12 +4,14 @@
 //   node scripts/collect.mjs           tallentaa klo 09:00 / 17:00 -tilannekuvan, jos se puuttuu
 //   node scripts/collect.mjs --force   tallentaa tilannekuvan nykyhetkellä
 //   node scripts/collect.mjs --forecast-only
+//   node scripts/collect.mjs --no-campaigns  ohita Black Friday ym. kampanjahaku (scripts/campaigns.mjs)
 //   node scripts/collect.mjs --no-sites      ohita yhtiöiden omat sivut (scripts/sites.mjs)
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load, save, expand, compress } from './history.mjs';
 import { scrapeSites } from './sites.mjs';
+import { collectCampaigns } from './campaigns.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.join(ROOT, 'site', 'data');
@@ -24,7 +26,10 @@ const POSTAL_CODES = [
   '90100', '96100',
 ];
 const SLOTS = ['09:00', '17:00'];
-const MAX_LATE_HOURS = 4;
+// GitHubin ajastukset myöhästyvät usein tunteja, joten keruuhetki hyväksytään 7 h ajan
+// (klo 9 -> 16 asti, klo 17 -> keskiyöhön).
+const MAX_LATE_HOURS = 7;
+const FORECAST_MAX_AGE_HOURS = 3;
 
 const args = new Set(process.argv.slice(2));
 
@@ -174,6 +179,22 @@ async function collectContracts(slot) {
   ex.states.push(state);
   save(HISTORY, compress(ex));
   console.log(`Tallennettu tilannekuva ${slot}`);
+
+  if (!args.has('--no-campaigns')) {
+    try {
+      await collectCampaigns(products, new Date().toISOString());
+    } catch (e) {
+      console.warn('Kampanjahaku epäonnistui:', e.message);
+    }
+  }
+}
+
+function forecastAgeHours() {
+  try {
+    return (Date.now() - Date.parse(JSON.parse(fs.readFileSync(FORECAST, 'utf8')).fetchedAt)) / 3600000;
+  } catch {
+    return Infinity;
+  }
 }
 
 async function collectForecast() {
@@ -200,13 +221,7 @@ async function main() {
   fs.mkdirSync(DATA, { recursive: true });
   let failed = false;
 
-  try {
-    await collectForecast();
-  } catch (e) {
-    failed = true;
-    console.error('Ennusteen haku epäonnistui:', e.message);
-  }
-
+  let collected = false;
   if (!args.has('--forecast-only')) {
     const now = new Date();
     const hp = helsinkiParts(now);
@@ -217,12 +232,22 @@ async function main() {
     else {
       try {
         await collectContracts(slot);
+        collected = true;
       } catch (e) {
         failed = true;
         console.error('Sopimusten haku epäonnistui:', e.message);
       }
     }
   }
+  // Ennuste: aina keruun yhteydessä, muuten vain jos vanhentunut (vähemmän committeja)
+  if (collected || args.has('--forecast-only') || forecastAgeHours() >= FORECAST_MAX_AGE_HOURS) {
+    try {
+      await collectForecast();
+    } catch (e) {
+      failed = true;
+      console.error('Ennusteen haku epäonnistui:', e.message);
+    }
+  } else console.log('Ennuste on tuore, ei päivitetä');
   if (failed) process.exitCode = 1;
 }
 

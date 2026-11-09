@@ -36,7 +36,12 @@ function extractInPage() {
   for (let i = 0; i < lines.length; i++) {
     const joined = `${lines[i]} ${lines[i + 1] || ''}`;
     const m = joined.match(/^(?:energia(?:maksu)?\s*)?(\d{1,2},\d{1,3})\s*(snt|c|¢)\s*\/\s*kwh/i);
-    if (!m) continue;
+    if (!m) {
+      // Hinta lauseen sisällä, esim. "Perussähkö 24 kk ja kiinnitä energiahinta vain 10,78 c/kWh"
+      const s = lines[i].match(/(\d{1,2})\s*kk\b[^.]{0,80}?energia\w*[^\d.]{0,20}(\d{1,2},\d{1,3})\s*(snt|c|¢)\s*\/\s*kwh/i);
+      if (s && !SKIP.test(lines[i])) out.push({ price: Number(s[2].replace(',', '.')), term: Number(s[1]), name: lines[i].slice(0, 80) });
+      continue;
+    }
     const ctx = lines.slice(Math.max(0, i - 1), i + 3).join(' ');
     if (SKIP.test(ctx)) continue;
     let term = null;
