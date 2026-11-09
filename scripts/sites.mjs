@@ -48,6 +48,8 @@ function extractInPage() {
     let name = '';
     for (let k = i - 1; k >= Math.max(0, i - 8) && term == null; k--) {
       const l = lines[k];
+      // Ohita perusmaksukampanjat, esim. "9 kk ilmainen perusmaksu" tai "3kk 0 €"
+      if (/perusmaksu|kuukausimaksu|ilmai|\b0\s*€|alennu/i.test(l)) continue;
       let t = l.match(/(\d{1,2})\s*(kk|kuukau)/i);
       if (t) { term = Number(t[1]); name = l; break; }
       t = l.match(/(\d)\s*vuode/i);
