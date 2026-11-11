@@ -45,6 +45,11 @@ Singles’ Day ja Sinkkupäivä. Löydöt tallentuvat tiedostoon `site/data/camp
 
 Kampanjat-sivun **vertailutaulukko** kytkee kampanjateksteissä mainitut sopimukset (esim. ”Optimi takuu 24 kk”) kerättyihin hintoihin: hinta nyt, hinta ennen kampanjan alkua, sijoitus saman keston sopimuksissa ja tekstistä poimittu kampanjaetu (esim. kuukausimaksu 0 € 12 kk). Taulukon voi suodattaa keston mukaan.
 
+Kampanjoita haetaan myös **muista lähteistä**:
+
+- Vertailu- ja tarjoussivustot (`EXTERNAL_SOURCES` tiedostossa `scripts/campaigns.mjs`): rivit, joissa mainitaan sähköyhtiö ja hinta/etu. Vain aiempia vuosia koskevat maininnat suodatetaan pois. Nämä näytetään erikseen kolmannen osapuolen tietona.
+- Uutiset (Google News, 60 pv): jos uutislinkki vie sähköyhtiön omalle sivulle (esim. Helenin Black Friday -sivu), sivu luetaan kuin yhtiön kampanjasivu ja tarkistetaan jatkossa joka keruulla.
+
 Testaus: `node scripts/campaigns.mjs`
 
 ## Käyttö paikallisesti

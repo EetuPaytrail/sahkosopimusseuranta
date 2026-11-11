@@ -351,7 +351,10 @@ function cheapest(series) {
 // ---------------------------------------------------------------------------
 // Kampanjat (Black Friday ym.)
 // ---------------------------------------------------------------------------
-const activeCampaigns = () => (campaigns?.offers || []).filter((o) => o.lastSeen === campaigns.updatedAt);
+// Vahvistetut kampanjat: yhtiön omat sivut ja Energiaviraston tiedot
+const activeCampaigns = () => (campaigns?.offers || []).filter((o) => o.lastSeen === campaigns.updatedAt && o.source !== 'external');
+// Vertailu- ja tarjoussivustojen maininnat
+const externalMentions = () => (campaigns?.offers || []).filter((o) => o.lastSeen === campaigns.updatedAt && o.source === 'external');
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('fi-FI', { timeZone: 'Europe/Helsinki' }) : '');
 
 function updateCampaignCount() {
@@ -385,7 +388,7 @@ function offerHtml(o, { compact = false } = {}) {
 // Kampanjasopimusten vertailu: kampanjateksteissä mainitut sopimukset hintoineen
 // ---------------------------------------------------------------------------
 const normTxt = (t) => t.toLowerCase().replace(/kuukau(tta|den|deksi|siksi)(?![a-zåäö])/g, 'kk').replace(/[-–—:()]/g, ' ').replace(/(\d)\s*kk/g, '$1 kk').replace(/\s+/g, ' ').trim();
-const escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\function renderCampaigns() {');
+const escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Tarjousta kuvaava ote (ei UKK-kysymys)
 const isOfferSnippet = (sn) => !/\?$/.test(sn.split(' · ')[0].trim()) && /tarjou|hintaan|etu|0\s*€|alennu|kampanjahint|ilmai/i.test(sn);
 
@@ -393,13 +396,23 @@ function productBase(m) {
   return normTxt(cleanName(m.n)).replace(/\b\d+\s*kk\b/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// Sallii taivutusmuodot: pitkistä sanoista vartalo (määräaikainen -> määräaika…), lyhyisiin 0–2 kirjaimen pääte
+function baseRegex(base) {
+  return base.split(' ').map((w) => (w.length >= 8 ? `${escRe(w.slice(0, w.length - 3))}[a-zåäö]*` : `${escRe(w)}[a-zåäö]{0,2}`)).join('\\s+');
+}
+
 function productMatches(m, text) {
   const base = productBase(m);
   if (base.length < 4) return false;
-  const re = m.pm === 'FixedPrice' && m.term > 0
-    ? new RegExp(`(^|[^a-zåäö])${escRe(base)}\\s*${m.term}\\s*kk`)
-    : new RegExp(`(^|[^a-zåäö])${escRe(base)}(?![a-zåäö])`);
-  return re.test(text);
+  const b = baseRegex(base);
+  const any = new RegExp(`(^|[^a-zåäö])${b}(?![a-zåäö])`);
+  if (m.term > 0) {
+    // Määräaikainen: oikea kesto nimen perässä, tai kampanjateksti ei mainitse kestoa lainkaan
+    if (new RegExp(`(^|[^a-zåäö])${b}\\s*${m.term}\\s*kk`).test(text)) return true;
+    return m.pm !== 'FixedPrice' && any.test(text) && !new RegExp(`${b}\\s*\\d+\\s*kk`).test(text);
+  }
+  // Toistaiseksi voimassa: ei saa olla osa määräaikaisen sopimuksen nimeä
+  return new RegExp(`(^|[^a-zåäö])(?<!määräaik[a-zåäö]*\\s+)${b}(?![a-zåäö])(?!\\s*\\d+\\s*kk)`).test(text);
 }
 
 function benefitsOf(texts) {
@@ -410,6 +423,8 @@ function benefitsOf(texts) {
     if (m) out.add(`${m[1] === 'perus' ? 'Perusmaksu' : 'Kuukausimaksu'} 0 € ${m[3]} kk`);
     m = t.match(/alennu\w*[^.·]{0,25}?(\d+[,.]\d+)\s*(snt|c)\s*\/\s*kwh/) || t.match(/(\d+[,.]\d+)\s*(snt|c)\s*\/\s*kwh[^.·]{0,25}alennu/);
     if (m) out.add(`Alennus ${m[1].replace('.', ',')} c/kWh`);
+    m = t.match(/marginaali\w*\s*(0|0[,.]\d+)\s*(c|snt)\s*\/\s*kwh[^.·]*?ensimmäis\w*\s*(\d+)\s*kk/);
+    if (m) out.add(`Marginaali ${m[1].replace('.', ',')} c/kWh ${m[3]} kk`);
     m = t.match(/(\d+)\s*(€|e)(?![\w,])[^.·]{0,40}?lahjakort/);
     if (m) out.add(`Arvonta: ${m[1]} € lahjakortti`);
   }
@@ -526,6 +541,35 @@ function renderCampaignCompare() {
     || '<p class="muted">Kampanjoista ei tunnistettu vielä yksittäisiä sopimuksia.</p>';
 }
 
+function renderExternal() {
+  const verified = new Set(activeCampaigns().map((o) => o.company));
+  const by = new Map();
+  for (const o of externalMentions()) {
+    if (!by.has(o.company)) by.set(o.company, []);
+    by.get(o.company).push(o);
+  }
+  const companies = [...by.keys()].sort((a, b) => Number(verified.has(b)) - Number(verified.has(a)) || short(a).localeCompare(short(b), 'fi'));
+  $('#extList').innerHTML = companies.map((c) => {
+    const items = by.get(c).map((o) => {
+      const sn = o.snippets.slice(0, 2).map((x) => `<p class="snip">${highlight(x)}</p>`).join('');
+      return `<div class="offer"><div class="offer-head"><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.host || o.url)}</a>${o.updated ? ` <span class="muted" style="font-weight:400">päivitetty ${esc(o.updated)}</span>` : ''}</div>${sn}</div>`;
+    }).join('');
+    const badge = verified.has(c)
+      ? '<span class="badge good">✓ Myös yhtiön sivuilla</span>'
+      : '<span class="badge">Vain vertailusivuilla</span>';
+    return `<div class="campaign-card ext-card"><div class="campaign-head"><h3 role="button" tabindex="0" data-company="${esc(c)}" style="cursor:pointer">${esc(short(c))}</h3>${starHtml(c)}${badge}<span class="muted" style="font-size:12px">${by.get(c).length} lähdettä</span></div>${items}</div>`;
+  }).join('') || '<p class="muted">Vertailusivustoilta ei löytynyt tämän vuoden kampanjamainintoja.</p>';
+  const src = campaigns.externalSources || [];
+  $('#extSources').textContent = src.length
+    ? `Tarkistetut sivustot (${src.filter((x) => x.ok).length}/${src.length}): ${src.map((x) => x.host).join(', ')}. Vanhoja vuosia koskevat maininnat suodatetaan pois. Tarkista ehdot aina yhtiöltä.`
+    : 'Vertailusivustoja ei ole vielä haettu.';
+
+  const news = campaigns.news || [];
+  $('#newsSection').classList.toggle('hidden', !news.length);
+  $('#newsList').innerHTML = news.map((n) => `<div class="sheet-row"><div><div class="n"><a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a></div>
+    <div class="m">${new Date(n.date).toLocaleDateString('fi-FI')} · ${esc(n.publisher || n.host || '')}${n.own ? ' <span class="badge good">yhtiön oma sivu</span>' : ''}</div></div></div>`).join('');
+}
+
 function renderCampaigns() {
   if (!campaigns) {
     $('#campaignActive').innerHTML = '<p class="muted">Kampanjahakua ei ole vielä ajettu. Tiedot päivittyvät seuraavalla keruukerralla.</p>';
@@ -533,6 +577,7 @@ function renderCampaigns() {
     return;
   }
   renderCampaignCompare();
+  renderExternal();
   const act = activeCampaigns();
   const byCompany = new Map();
   for (const o of act) {
@@ -560,7 +605,7 @@ function renderCampaigns() {
     : '<p class="muted">Ei vielä päättyneitä kampanjoita.</p>';
 
   const without = (campaigns.checkedCompanies || []).filter((c) => !byCompany.has(c)).map(short);
-  $('#campaignSub').innerHTML = `Black Friday, Black Week, Black Month, Cyber Monday, Singles’ Day ym. tarjoukset sähköyhtiöiden verkkosivuilta ja Energiaviraston sopimustiedoista. Viimeisin haku <strong>${new Date(campaigns.updatedAt).toLocaleString('fi-FI', { timeZone: 'Europe/Helsinki' })}</strong>: ${campaigns.checkedPages} sivua, ${(campaigns.checkedCompanies || []).length} yhtiötä, kampanja ${byCompany.size} yhtiöllä.`;
+  $('#campaignSub').innerHTML = `Black Friday, Black Week, Black Month, Cyber Monday, Singles’ Day ym. tarjoukset sähköyhtiöiden verkkosivuilta ja Energiaviraston sopimustiedoista. Viimeisin haku <strong>${new Date(campaigns.updatedAt).toLocaleString('fi-FI', { timeZone: 'Europe/Helsinki' })}</strong>: ${campaigns.checkedPages} sivua, ${(campaigns.checkedCompanies || []).length} yhtiötä, kampanja ${byCompany.size} yhtiöllä omilla sivuillaan, ${new Set(externalMentions().map((o) => o.company)).size} yhtiötä mainittu vertailusivuilla.`;
   $('#campaignChecked').innerHTML = `Ei kampanjaa: ${without.map(esc).join(', ') || '–'}.${campaigns.failedPages?.length ? ` Sivua ei saatu luettua: ${campaigns.failedPages.map((p) => esc(short(p.company))).join(', ')}.` : ''} Verkkosivuilta haetaan yhtiöiden etusivut, seurattavat sopimussivut ja niiltä löytyvät kampanjalinkit.`;
 }
 
@@ -700,13 +745,14 @@ function renderTop() {
   // Kampanjabanneri
   const act = activeCampaigns();
   const names = [...new Set(act.map((o) => short(o.company)))];
+  const extOnly = new Set(externalMentions().map((o) => o.company).filter((c) => !act.some((o) => o.company === c))).size;
   const banner = $('#topCampaign');
   banner.className = names.length ? '' : 'hidden';
   if (names.length) {
     const kw = [...new Set(act.map((o) => o.keyword).filter(Boolean))][0] || 'Kampanja';
     const period = act.map((o) => o.period).find(Boolean);
     banner.innerHTML = `<button class="banner" data-goto="campaigns"><span class="tag">${esc(kw)}</span>
-      <div><b>${names.map(esc).join(', ')}</b><span class="txt">${names.length === 1 ? 'Kampanja käynnissä' : `${names.length} yhtiöllä kampanja`}${period ? ` · ${esc(period)}` : ''}</span></div><span class="go">›</span></button>`;
+      <div><b>${names.map(esc).join(', ')}</b><span class="txt">${names.length === 1 ? 'Kampanja käynnissä' : `${names.length} yhtiöllä kampanja`}${period ? ` · ${esc(period)}` : ''}${extOnly ? ` · +${extOnly} muuta vertailusivuilla` : ''}</span></div><span class="go">›</span></button>`;
   }
 
   // Suosikit
