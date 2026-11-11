@@ -26,9 +26,10 @@ const POSTAL_CODES = [
   '90100', '96100',
 ];
 const SLOTS = ['09:00', '17:00'];
-// GitHubin ajastukset myöhästyvät usein tunteja, joten keruuhetki hyväksytään 7 h ajan
-// (klo 9 -> 16 asti, klo 17 -> keskiyöhön).
-const MAX_LATE_HOURS = 7;
+// GitHub käynnistää ajastettuja ajoja epäluotettavasti (usein tunteja myöhässä tai ei
+// ollenkaan), joten keruuhetki on voimassa seuraavaan asti: klo 9 -> klo 17 asti,
+// klo 17 -> seuraavana aamuna klo 9 asti. Todellinen hakuaika tallentuu kenttään at.
+const MAX_LATE_HOURS = 16;
 const FORECAST_MAX_AGE_HOURS = 3;
 
 const args = new Set(process.argv.slice(2));

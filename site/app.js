@@ -1147,13 +1147,19 @@ function renderCompanySheet(c) {
   });
 }
 
+// Todellinen hakuaika, jos keruu tehtiin yli tunnin myöhässä keruuhetkestä
+function lateNote(sn) {
+  if (!sn.at || Date.parse(sn.at) - Date.parse(sn.t) < 3600000) return '';
+  return ` (haettu ${new Date(sn.at).toLocaleString('fi-FI', { timeZone: 'Europe/Helsinki', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })})`;
+}
+
 function statusLong() {
   const s = D.snaps[D.latest];
   const now = helsinkiNow();
   const mins = now.h * 60 + now.m;
   const next = mins < 9 * 60 ? 'tänään klo 9' : mins < 17 * 60 ? 'tänään klo 17' : 'huomenna klo 9';
   const n = D.ids.filter((id) => D.vals[id][D.latest]).length;
-  return `Päivitetty ${fmtSnap(s)} · ${n} sopimusta. Seuraava päivitys ${next} (voi myöhästyä).`;
+  return `Päivitetty ${fmtSnap(s)}${lateNote(s)} · ${n} sopimusta. Seuraava päivitys ${next} (voi myöhästyä).`;
 }
 
 function renderSettingsSheet() {
